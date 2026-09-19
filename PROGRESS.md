@@ -1,8 +1,8 @@
 # PROGRESS — PixelCAD Phase 0: Bootstrap & Command Engine
 
-**Last updated:** 2026-09-19T02:35:00+08:00
-**Current task:** Task 6 — Session infrastructure (side quest)
-**Completed tasks:** 1, 2, 3, 4, 5
+**Last updated:** 2026-09-19T03:00:00+08:00
+**Current task:** Session complete
+**Completed tasks:** 1, 2, 3, 4, 5, 6, 7
 **Current mode:** A
 
 ## Log
@@ -98,11 +98,33 @@
 - Files modified: `crates/app/Cargo.toml` (slint, slint-build, i-slint-backend-testing dev-dep), `crates/app/build.rs`, `crates/app/ui/main.slint` (new), `crates/app/src/{main.rs,controller.rs,render.rs}`, `crates/core/src/engine.rs` (can_undo/can_redo), `Cargo.lock`.
 - Committed: `be3b482` "Task 5: Slint shell (pixelcad-app)".
 
+### 2026-09-19T02:50:00+08:00 — Task 6 complete
+- Implemented: `.agents/skills/next-phase/SKILL.md` (new) — a project-local Zed agent skill (per the `create-skill`/`skill-development` conventions) that automates reading `ROADMAP.md`, verifying the current phase's acceptance criteria, archiving `PLAN.md` to `Plans/archive/PLAN-phase<N>.md`, updating the Roadmap Status Log table, carrying forward `BACKLOG.md` items, and invoking the Planner profile for the next `PENDING` phase — then stopping to wait for the maintainer to lock the new plan. `ROADMAP.md` — added one sentence to the "Close" step of the Session Protocol pointing at the new skill. `Skills/INDEX.md` — registered the skill in a small table (this file lives under the gitignored `/Skills` directory per the I2 fallback, so the edit is local-only, same as everything else there).
+- Also added (spilling slightly ahead into Task 7 verification work, committed separately): `crates/app/src/main.rs` gained `save_button_output_replays_through_the_real_cli_binary`, an 8th headless GUI test that saves a script via the real Save button and then invokes the actually-compiled `pixelcad-cli` binary (located via `std::env::current_exe()` relative pathing) on it, confirming a non-empty PNG is produced — the strongest possible automated evidence for the "one command engine, many surfaces" doctrine short of a human manually using both surfaces.
+- Tests: `cargo test --workspace` = 51 passed / 0 failed (23 `pixelcad-app` + 1 `pixelcad-cli` determinism + 26 `pixelcad-core` lib + 1 `pixelcad-core` ship determinism).
+- Mode used: A (sequential; no blockers).
+- Deviations from PLAN.md: none. Task 6's "Files affected" list (`.agents/skills/next-phase/SKILL.md`, `ROADMAP.md`, `Skills/INDEX.md`) was followed exactly; the CLI-interop test technically belongs to "more verification," not Task 6's own scope, but was small, valuable, and natural to add immediately after Task 5/6's other work rather than deferred to a hypothetical future session.
+- Files modified: `.agents/skills/next-phase/SKILL.md` (new), `ROADMAP.md`, `Skills/INDEX.md` (untracked), `crates/app/src/main.rs`.
+- Committed: `19327f5` "Task 6: session infrastructure (next-phase skill)"; `5d033ba` "app: add real pixelcad-cli interop test for GUI-saved scripts".
+
+### 2026-09-19T03:00:00+08:00 — Task 7 complete (session close-out)
+- Ran the full `PLAN.md` acceptance checklist with evidence: 7/8 PASS, 1 PARTIAL (criterion 8, I2 unresolved — fallback applied exactly as pre-specified). Full table with evidence is in `PHASE1_RESULT.md` Section 2.
+- Manual GUI verification: relaunched `pixelcad-app` as a real background process (confirmed via `ps aux`), captured one full-screen screenshot to visually confirm the window (title "PixelCAD", Undo/Redo, save controls, 16-swatch palette, gridded canvas viewport all visible), then deleted the screenshot immediately since it also captured unrelated personal desktop content from other apps. No trace of it was committed or retained. Process was cleanly terminated afterward (`pkill -f target/debug/pixelcad-app`; confirmed gone via `pgrep`).
+- Re-verified CLI determinism fresh: `shasum -a 256` on two independent runs — identical digest `bde008684f8384379e33f514d15d4ca4c1aed97798d52a08bbb1cccd6f781232`; both temp PNGs deleted after.
+- Re-verified `cargo tree -p pixelcad-core`: still only `thiserror` (+ proc-macro build deps).
+- `PLAN.md`: Status flipped LOCKED → COMPLETE, all 8 acceptance criteria checked off (7 `[x]`, 1 explicitly marked PARTIAL with the I2 explanation inline), then moved to `Plans/archive/PLAN-phase0.md`.
+- `ROADMAP.md`: Phase 0 heading and Status Log row flipped `ACTIVE` → `COMPLETE` (Locked/Completed dates both 2026-09-19); Phase 1 deliberately left `PENDING` (per the `next-phase` skill's own rule: the next phase only becomes `ACTIVE` once the Planner drafts and the maintainer locks its plan — not this session's job).
+- Wrote `PHASE1_RESULT.md` (self-contained reference document per the session's required schema: header, acceptance criteria table, artifacts tree, build/run/verify commands, architecture-as-built with a Mermaid diagram, decisions/deviations, known limitations, handoff to next phase, reproduce-from-clean-clone).
+- No `BACKLOG.md` was created: nothing out-of-scope was discovered during this session that warranted tracking beyond I2, which is already fully documented in `PLAN.md`, `PHASE1_RESULT.md`, and this file.
+- Mode used: A (sequential; no blockers during execution, one intentional PARTIAL by design).
+- Files modified: `PLAN.md` → `Plans/archive/PLAN-phase0.md`, `ROADMAP.md`, `PHASE1_RESULT.md` (new), `PROGRESS.md`.
+- Committed: see final session commit SHA in `PHASE1_RESULT.md` Section 1 (self-referential — committed once, SHA captured, inserted, amended once).
+
 ## Current Blockers
-[Empty — the macOS screen-recording permission gap only affected an optional extra screenshot, not any acceptance criterion, and has since been resolved by the user. I2 (Profiles/Skills versioning) remains a non-blocking open question, see the Session-start log entry.]
+[Empty — the macOS screen-recording permission gap only affected an optional extra screenshot, not any acceptance criterion, and has since been resolved by the user. I2 (Profiles/Skills versioning) remains open for the next Planner/maintainer — see PHASE1_RESULT.md Section 8.]
 
 ## Backlog (out-of-scope items discovered during execution)
 [none yet]
 
 ## Resumption
-Task 6 — Session infrastructure (side quest). Task 5 is complete, verified, and about to be committed. Next step: create the project-local `next-phase` skill and update `Skills/INDEX.md`, then Task 7 close-out. Last stable state: `cargo build --workspace` and `cargo test --workspace` both pass (50/50).
+Session complete. All 7 tasks done, PHASE1_RESULT.md written, PLAN.md archived and marked COMPLETE, ROADMAP.md updated. Next session should start with the Planner profile for Phase 1 ("Drawing MVP"), after the maintainer resolves I2.

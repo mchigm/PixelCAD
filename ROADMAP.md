@@ -36,7 +36,7 @@ Resuming a half-finished phase: skip step 1; Autopilot resumes from `PROGRESS.md
 
 ## Phases
 
-### Phase 0 — Bootstrap & Command Engine        [ACTIVE]
+### Phase 0 — Bootstrap & Command Engine        [COMPLETE]
 Repo bootstrap, Cargo workspace, typed command engine, single-layer pixel
 document, minimal Slint canvas (pencil, palette, pan/zoom), headless CLI replay
 to PNG.
@@ -109,7 +109,7 @@ Phase 5b.
 
 | Phase | Status | Locked | Completed |
 |-------|--------|--------|-----------|
-| 0 | ACTIVE | — | — |
+| 0 | COMPLETE | 2026-09-19 | 2026-09-19 |
 | 1 | PENDING | — | — |
 | 2 | PENDING | — | — |
 | 3 | PENDING | — | — |

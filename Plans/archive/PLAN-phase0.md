@@ -1,7 +1,8 @@
 # PLAN — Phase 0: Bootstrap & Command Engine
 
 **Created:** 2026-09-19T00:00:00+08:00
-**Status:** LOCKED
+**Status:** COMPLETE
+**Completed:** 2026-09-19T02:55:00+08:00
 **Product:** PixelCAD (`pixelcad`)
 
 ## Objective
@@ -43,21 +44,29 @@ GPU-authoritative canvas (breaks determinism and headless execution).
 
 ## Acceptance Criteria
 
-- [ ] `cargo build` succeeds from the current repository path (apostrophe/space
+Full evidence for each criterion is in `PHASE1_RESULT.md` ("Acceptance
+Criteria Results" section). Summary:
+
+- [x] `cargo build` succeeds from the current repository path (apostrophe/space
       path hazard check)
-- [ ] `cargo test` passes, including a determinism test: replaying
+- [x] `cargo test` passes, including a determinism test: replaying
       `docs/samples/ship.pxc` twice yields identical document hashes
-- [ ] `cargo run -p pixelcad-cli -- run docs/samples/ship.pxc --out out.png`
+- [x] `cargo run -p pixelcad-cli -- run docs/samples/ship.pxc --out out.png`
       produces a PNG; running it twice produces byte-identical files
-- [ ] GUI launches; user can pan, zoom (nearest-neighbour with pixel grid at
+- [x] GUI launches; user can pan, zoom (nearest-neighbour with pixel grid at
       high zoom), draw with a 1-pixel pencil, and pick a color from a palette
-- [ ] GUI actions are recorded as commands; "Save script" writes a `.pxc` file
+- [x] GUI actions are recorded as commands; "Save script" writes a `.pxc` file
       that the CLI replays to reproduce the drawing exactly
-- [ ] `core` has no dependency on `slint` or any UI/GPU crate (verified via
+- [x] `core` has no dependency on `slint` or any UI/GPU crate (verified via
       `cargo tree`)
-- [ ] Undo/redo works in the GUI for pencil strokes
-- [ ] Repository is a git repo with an initial commit; `Profiles/`, `Skills/`,
-      and planning docs are versioned; `/target` and `*.log` are ignored
+- [x] Undo/redo works in the GUI for pencil strokes
+- [ ] **PARTIAL** — Repository is a git repo with an initial commit (true);
+      planning docs are versioned (true); `/target` and `*.log` are ignored
+      (true); but `Profiles/` and `Skills/` are **not** versioned — I2
+      (Profiles/Skills versioning contradiction, see PHASE1_RESULT.md) was
+      never answered by the maintainer, so the documented fallback applied:
+      leave them untracked/ignored, as `.gitignore` already did at session
+      start.
 
 ## Constraints
 
