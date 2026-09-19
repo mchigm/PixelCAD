@@ -44,7 +44,7 @@
 - Deviations from PLAN.md: none in scope. Added `PaletteSet` state to the engine's snapshot (not just the document) so palette changes are also undoable/redoable and round-trip through `save_script`; PLAN.md's Command enum already listed `PaletteSet`, this just decides where its state lives.
 - Mode D regression check: `cargo build` (workspace) and `cargo test --workspace` both pass. `cargo tree -p pixelcad-core` shows only `thiserror` (+ its proc-macro build deps) — confirms criterion 6 (no UI/GPU/slint dependency in `core`) holds after this change.
 - Files modified: `crates/core/src/{command.rs,parser.rs,engine.rs}` (new), `crates/core/src/lib.rs` (module wiring + re-exports).
-- Committed: (see next commit in this session).
+- Committed: `2ab06fa` "Task 3: command engine (pixelcad-core)".
 
 ## Current Blockers
 [Empty — I2 is a non-blocking open question, see Log; Tasks 2-7 proceed regardless.]
