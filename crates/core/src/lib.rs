@@ -5,6 +5,7 @@
 //! execution, shared verbatim by the GUI shell (`pixelcad-app`) and the
 //! headless CLI (`pixelcad-cli`).
 
+pub mod base64;
 pub mod command;
 pub mod document;
 pub mod engine;

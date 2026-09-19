@@ -227,6 +227,13 @@ pub fn parse_line(line: &str, line_number: usize) -> Result<Command, ParseError>
             fill: parse_bool(require(&fields, "fill", line_number)?, "fill", line_number)?,
             color: parse_color(require(&fields, "color", line_number)?, "color", line_number)?,
         }),
+        "image.import" => Ok(Command::ImageImport {
+            x: parse_i64(require(&fields, "x", line_number)?, "x", line_number)?,
+            y: parse_i64(require(&fields, "y", line_number)?, "y", line_number)?,
+            width: parse_u32(require(&fields, "width", line_number)?, "width", line_number)?,
+            height: parse_u32(require(&fields, "height", line_number)?, "height", line_number)?,
+            data: require(&fields, "data", line_number)?.to_string(),
+        }),
         "fill.bucket" => Ok(Command::FillBucket {
             x: parse_i64(require(&fields, "x", line_number)?, "x", line_number)?,
             y: parse_i64(require(&fields, "y", line_number)?, "y", line_number)?,
@@ -318,6 +325,10 @@ pub fn serialize_command(command: &Command) -> String {
         Command::FillBucket { x, y, color } => {
             format!("fill.bucket x={} y={} color=\"{}\"", x, y, format_hex_color(*color))
         }
+        Command::ImageImport { x, y, width, height, data } => format!(
+            "image.import x={} y={} width={} height={} data=\"{}\"",
+            x, y, width, height, data
+        ),
     }
 }
 
@@ -363,6 +374,13 @@ mod tests {
             Command::RectDraw { x0: 1, y0: 2, x1: 30, y1: 4, fill: true, color: [9, 8, 7, 255] },
             Command::RectDraw { x0: 0, y0: 0, x1: 1, y1: 1, fill: false, color: [0, 0, 0, 255] },
             Command::FillBucket { x: 6, y: 7, color: [0x20, 0x30, 0x40, 0xff] },
+            Command::ImageImport {
+                x: 1,
+                y: 2,
+                width: 1,
+                height: 1,
+                data: crate::base64::encode(&[1, 2, 3, 4]),
+            },
         ]
     }
 
@@ -393,10 +411,11 @@ mod tests {
             Command::BrushStroke { .. } => 15,
             Command::RectDraw { .. } => 16,
             Command::FillBucket { .. } => 17,
+            Command::ImageImport { .. } => 18,
         }
     }
 
-    const VARIANT_COUNT: usize = 18;
+    const VARIANT_COUNT: usize = 19;
 
     #[test]
     fn every_command_variant_is_covered_by_the_round_trip_test() {

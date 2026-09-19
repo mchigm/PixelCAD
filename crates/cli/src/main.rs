@@ -11,7 +11,7 @@ use std::fs;
 use std::io::BufWriter;
 use std::process::ExitCode;
 
-use pixelcad_core::open_project;
+use pixelcad_core::{base64, open_project, serialize_project, Command, Engine};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -29,12 +29,90 @@ fn run(args: &[String]) -> Result<(), String> {
         [cmd, script_path, flag, out_path] if cmd == "run" && flag == "--out" => {
             run_script(script_path, out_path)
         }
+        [cmd, png_path, flag, out_path] if cmd == "import" && flag == "--out" => {
+            import_png(png_path, out_path)
+        }
         _ => Err(usage()),
     }
 }
 
 fn usage() -> String {
-    "usage: pixelcad-cli run <script.pxc|project.pxcproj> --out <output.png>".to_string()
+    concat!(
+        "usage:\n",
+        "  pixelcad-cli run    <script.pxc|project.pxcproj> --out <output.png>\n",
+        "  pixelcad-cli import <input.png>                  --out <project.pxcproj>"
+    )
+    .to_string()
+}
+
+/// Converts a PNG into a version-1 project consisting of a `canvas.new`
+/// sized to the image plus one `image.import` carrying its pixels.
+///
+/// Going through commands rather than constructing a `Document` directly is
+/// the point: an imported image is ordinary, undoable, replayable document
+/// history like anything else the user does.
+fn import_png(png_path: &str, out_path: &str) -> Result<(), String> {
+    let (width, height, rgba) =
+        read_png_rgba8(png_path).map_err(|e| format!("failed to read {png_path}: {e}"))?;
+
+    let mut engine = Engine::new();
+    engine
+        .execute(Command::CanvasNew { width, height })
+        .map_err(|e| format!("cannot create a {width}x{height} canvas: {e}"))?;
+    engine
+        .execute(Command::ImageImport {
+            x: 0,
+            y: 0,
+            width,
+            height,
+            data: base64::encode(&rgba),
+        })
+        .map_err(|e| format!("cannot import image data: {e}"))?;
+
+    fs::write(out_path, serialize_project(&engine))
+        .map_err(|e| format!("failed to write {out_path}: {e}"))
+}
+
+/// Decodes a PNG to packed RGBA8, converting from whatever colour type the
+/// file actually uses. Returns `(width, height, pixels)`.
+fn read_png_rgba8(path: &str) -> Result<(u32, u32, Vec<u8>), String> {
+    let file = fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut decoder = png::Decoder::new(std::io::BufReader::new(file));
+    // Normalise everything to 8-bit RGBA so the rest of the pipeline only
+    // ever sees one pixel layout.
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
+
+    let mut reader = decoder.read_info().map_err(|e| e.to_string())?;
+    let mut buf = vec![0u8; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).map_err(|e| e.to_string())?;
+    buf.truncate(info.buffer_size());
+
+    let pixel_count = info.width as usize * info.height as usize;
+    let rgba = match info.color_type {
+        png::ColorType::Rgba => buf,
+        png::ColorType::Rgb => widen(&buf, pixel_count, 3, |p| [p[0], p[1], p[2], 255]),
+        png::ColorType::Grayscale => widen(&buf, pixel_count, 1, |p| [p[0], p[0], p[0], 255]),
+        png::ColorType::GrayscaleAlpha => {
+            widen(&buf, pixel_count, 2, |p| [p[0], p[0], p[0], p[1]])
+        }
+        png::ColorType::Indexed => {
+            return Err("indexed PNGs should have been expanded by the decoder".to_string())
+        }
+    };
+    Ok((info.width, info.height, rgba))
+}
+
+fn widen(
+    src: &[u8],
+    pixel_count: usize,
+    stride: usize,
+    to_rgba: impl Fn(&[u8]) -> [u8; 4],
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(pixel_count * 4);
+    for i in 0..pixel_count {
+        out.extend_from_slice(&to_rgba(&src[i * stride..(i + 1) * stride]));
+    }
+    out
 }
 
 fn run_script(script_path: &str, out_path: &str) -> Result<(), String> {

@@ -77,6 +77,16 @@ pub enum Command {
     /// the active layer, replacing the contiguous region that exactly
     /// matches the starting pixel's RGBA.
     FillBucket { x: i64, y: i64, color: Color },
+
+    /// `image.import x=<i64> y=<i64> width=<u32> height=<u32> data="<b64>"`
+    /// — stamp a block of raw RGBA8 pixels onto the active layer with its
+    /// top-left corner at `(x, y)`, clipped by the canvas and the selection.
+    ///
+    /// `data` is base64 of exactly `width * height * 4` bytes, row-major,
+    /// top-left origin — the same layout as everything else in this crate.
+    /// Carrying the pixels inline is what keeps a project file a single
+    /// self-contained, replayable artefact with no sidecar files.
+    ImageImport { x: i64, y: i64, width: u32, height: u32, data: String },
 }
 
 impl Command {
@@ -102,6 +112,7 @@ impl Command {
             Command::BrushStroke { .. } => "brush.stroke",
             Command::RectDraw { .. } => "rect.draw",
             Command::FillBucket { .. } => "fill.bucket",
+            Command::ImageImport { .. } => "image.import",
         }
     }
 }

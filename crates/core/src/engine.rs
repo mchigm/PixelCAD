@@ -44,6 +44,10 @@ pub enum EngineError {
     PaletteIndexOutOfRange { index: u8 },
     #[error(transparent)]
     Document(#[from] DocumentError),
+    #[error(transparent)]
+    Base64(#[from] crate::base64::Base64Error),
+    #[error("image.import declares {expected} bytes of pixel data but carries {found}")]
+    ImageDataLength { expected: usize, found: usize },
 }
 
 /// A rectangular selection, in document pixel coordinates.
@@ -406,6 +410,23 @@ fn apply(state: &mut EngineState, command: &Command) -> Result<(), EngineError> 
             let selection = state.selection;
             let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
             flood_fill(doc, selection, x, y, color);
+            Ok(())
+        }
+        Command::ImageImport { x, y, width, height, ref data } => {
+            let selection = state.selection;
+            let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
+            let pixels = crate::base64::decode(data)?;
+            let expected = width as usize * height as usize * 4;
+            if pixels.len() != expected {
+                return Err(EngineError::ImageDataLength { expected, found: pixels.len() });
+            }
+            for row in 0..height as i64 {
+                for col in 0..width as i64 {
+                    let i = ((row * width as i64 + col) * 4) as usize;
+                    let color = [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]];
+                    write_lenient(doc, selection, x + col, y + row, color);
+                }
+            }
             Ok(())
         }
     }
@@ -799,6 +820,60 @@ mod tests {
         for i in 0..=4 {
             assert_eq!(doc.get_pixel(i, i).unwrap(), [255, 255, 255, 255]);
         }
+    }
+
+    #[test]
+    fn image_import_stamps_a_block_at_an_offset() {
+        let mut e = canvas(6);
+        // A 2x2 block: red, green / blue, transparent.
+        let data = crate::base64::encode(&[
+            255, 0, 0, 255, //
+            0, 255, 0, 255, //
+            0, 0, 255, 255, //
+            0, 0, 0, 0,
+        ]);
+        e.execute(Command::ImageImport { x: 2, y: 3, width: 2, height: 2, data }).unwrap();
+
+        let doc = e.document().unwrap();
+        assert_eq!(doc.get_pixel(2, 3).unwrap(), [255, 0, 0, 255]);
+        assert_eq!(doc.get_pixel(3, 3).unwrap(), [0, 255, 0, 255]);
+        assert_eq!(doc.get_pixel(2, 4).unwrap(), [0, 0, 255, 255]);
+        assert_eq!(doc.get_pixel(3, 4).unwrap(), [0, 0, 0, 0]);
+        assert_eq!(doc.get_pixel(0, 0).unwrap(), [0, 0, 0, 0], "nothing else touched");
+    }
+
+    #[test]
+    fn image_import_clips_at_the_canvas_edge() {
+        let mut e = canvas(2);
+        let data = crate::base64::encode(&[9u8; 4 * 4]); // 2x2 block
+        e.execute(Command::ImageImport { x: 1, y: 1, width: 2, height: 2, data }).unwrap();
+        assert_eq!(painted(&e), vec![(1, 1)], "only the on-canvas corner lands");
+    }
+
+    #[test]
+    fn image_import_rejects_a_payload_of_the_wrong_length() {
+        let mut e = canvas(4);
+        let data = crate::base64::encode(&[0u8; 8]); // claims 2x2 = 16 bytes
+        let err = e
+            .execute(Command::ImageImport { x: 0, y: 0, width: 2, height: 2, data })
+            .unwrap_err();
+        assert_eq!(err, EngineError::ImageDataLength { expected: 16, found: 8 });
+        assert_eq!(painted(&e).len(), 0, "a rejected import writes nothing");
+    }
+
+    #[test]
+    fn image_import_rejects_corrupt_base64() {
+        let mut e = canvas(4);
+        let err = e
+            .execute(Command::ImageImport {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+                data: "not*valid".to_string(),
+            })
+            .unwrap_err();
+        assert!(matches!(err, EngineError::Base64(_)), "got: {err:?}");
     }
 
     #[test]
