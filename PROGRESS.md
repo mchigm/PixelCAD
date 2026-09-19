@@ -118,7 +118,7 @@
 - No `BACKLOG.md` was created: nothing out-of-scope was discovered during this session that warranted tracking beyond I2, which is already fully documented in `PLAN.md`, `PHASE1_RESULT.md`, and this file.
 - Mode used: A (sequential; no blockers during execution, one intentional PARTIAL by design).
 - Files modified: `PLAN.md` → `Plans/archive/PLAN-phase0.md`, `ROADMAP.md`, `PHASE1_RESULT.md` (new), `PROGRESS.md`.
-- Committed: see final session commit SHA in `PHASE1_RESULT.md` Section 1 (self-referential — committed once, SHA captured, inserted, amended once).
+- Committed: `d9284f0` "Task 7: close-out — Phase 0 complete"; amended once (final `HEAD` = `28de9d6`) solely to insert the `d9284f0` SHA reference into `PHASE1_RESULT.md` Section 1.
 
 ## Current Blockers
 [Empty — the macOS screen-recording permission gap only affected an optional extra screenshot, not any acceptance criterion, and has since been resolved by the user. I2 (Profiles/Skills versioning) remains open for the next Planner/maintainer — see PHASE1_RESULT.md Section 8.]
