@@ -1,0 +1,162 @@
+# blueprint.pxcproj — Phase 1 dogfood artefact.
+#
+# A 128x96 historical ship blueprint, drawn end to end with nothing but the
+# Phase 1 tool set. It is the concrete evidence behind the Phase 1 exit
+# criterion ("sufficient to draw a historical ship blueprint end to end"):
+# four layers, every drawing command, layer opacity, and a selection used
+# to mask a fill.
+#
+# Layer stack, bottom to top:
+#   0  Paper       flat blueprint-blue ground (fill.bucket)
+#   1  Grid        construction grid, drawn at reduced layer opacity
+#   2  Hull        waterline, hull, deck, stem/stern posts, masts, rigging
+#   3  Annotation  scale bar, frame ticks, name plate
+#
+# Render with:
+#   cargo run -p pixelcad-cli -- run docs/samples/blueprint.pxcproj --out blueprint.png
+
+pixelcad.project version=1
+canvas.new width=128 height=96
+
+# Palette: a traditional cyanotype blueprint scheme.
+palette.set index=0 color="#0b2f6b"
+palette.set index=1 color="#ffffff"
+palette.set index=2 color="#8fb6ff"
+palette.set index=3 color="#c9dcff"
+palette.set index=4 color="#ff6b4a"
+
+# ---------------------------------------------------------------- Paper
+layer.rename index=0 name="Paper"
+fill.bucket x=0 y=0 color="#0b2f6bff"
+
+# ----------------------------------------------------------------- Grid
+# Construction grid every 8 px, softened by layer opacity rather than by a
+# lighter colour, so the grid can be toggled or re-tinted independently.
+layer.add name="Grid"
+line.draw x0=0 y0=8 x1=127 y1=8 color="#8fb6ffff"
+line.draw x0=0 y0=16 x1=127 y1=16 color="#8fb6ffff"
+line.draw x0=0 y0=24 x1=127 y1=24 color="#8fb6ffff"
+line.draw x0=0 y0=32 x1=127 y1=32 color="#8fb6ffff"
+line.draw x0=0 y0=40 x1=127 y1=40 color="#8fb6ffff"
+line.draw x0=0 y0=48 x1=127 y1=48 color="#8fb6ffff"
+line.draw x0=0 y0=56 x1=127 y1=56 color="#8fb6ffff"
+line.draw x0=0 y0=64 x1=127 y1=64 color="#8fb6ffff"
+line.draw x0=0 y0=72 x1=127 y1=72 color="#8fb6ffff"
+line.draw x0=0 y0=80 x1=127 y1=80 color="#8fb6ffff"
+line.draw x0=0 y0=88 x1=127 y1=88 color="#8fb6ffff"
+line.draw x0=8 y0=0 x1=8 y1=95 color="#8fb6ffff"
+line.draw x0=16 y0=0 x1=16 y1=95 color="#8fb6ffff"
+line.draw x0=24 y0=0 x1=24 y1=95 color="#8fb6ffff"
+line.draw x0=32 y0=0 x1=32 y1=95 color="#8fb6ffff"
+line.draw x0=40 y0=0 x1=40 y1=95 color="#8fb6ffff"
+line.draw x0=48 y0=0 x1=48 y1=95 color="#8fb6ffff"
+line.draw x0=56 y0=0 x1=56 y1=95 color="#8fb6ffff"
+line.draw x0=64 y0=0 x1=64 y1=95 color="#8fb6ffff"
+line.draw x0=72 y0=0 x1=72 y1=95 color="#8fb6ffff"
+line.draw x0=80 y0=0 x1=80 y1=95 color="#8fb6ffff"
+line.draw x0=88 y0=0 x1=88 y1=95 color="#8fb6ffff"
+line.draw x0=96 y0=0 x1=96 y1=95 color="#8fb6ffff"
+line.draw x0=104 y0=0 x1=104 y1=95 color="#8fb6ffff"
+line.draw x0=112 y0=0 x1=112 y1=95 color="#8fb6ffff"
+line.draw x0=120 y0=0 x1=120 y1=95 color="#8fb6ffff"
+layer.opacity index=1 value=48
+
+# ----------------------------------------------------------------- Hull
+layer.add name="Hull"
+
+# Load waterline, drawn the full width of the sheet.
+brush.stroke x0=4 y0=64 x1=123 y1=64 size=1 color="#8fb6ffff"
+
+# Sheer line (upper edge of the hull), bow at the right.
+line.draw x0=20 y0=58 x1=40 y1=55 color="#ffffffff"
+line.draw x0=40 y0=55 x1=70 y1=54 color="#ffffffff"
+line.draw x0=70 y0=54 x1=96 y1=56 color="#ffffffff"
+line.draw x0=96 y0=56 x1=108 y1=60 color="#ffffffff"
+
+# Keel and garboard run.
+line.draw x0=26 y0=72 x1=44 y1=74 color="#ffffffff"
+line.draw x0=44 y0=74 x1=86 y1=74 color="#ffffffff"
+line.draw x0=86 y0=74 x1=100 y1=71 color="#ffffffff"
+
+# Stern post and transom (left) and stem post (right).
+line.draw x0=20 y0=58 x1=26 y1=72 color="#ffffffff"
+line.draw x0=20 y0=58 x1=18 y1=50 color="#ffffffff"
+line.draw x0=108 y0=60 x1=100 y1=71 color="#ffffffff"
+line.draw x0=108 y0=60 x1=114 y1=50 color="#ffffffff"
+
+# Deck line, one strake below the sheer.
+line.draw x0=24 y0=61 x1=104 y1=61 color="#c9dcffff"
+
+# Three masts, raked slightly aft.
+brush.stroke x0=38 y0=55 x1=35 y1=14 size=1 color="#ffffffff"
+brush.stroke x0=62 y0=54 x1=59 y1=8 size=1 color="#ffffffff"
+brush.stroke x0=86 y0=55 x1=83 y1=18 size=1 color="#ffffffff"
+# Bowsprit.
+brush.stroke x0=106 y0=59 x1=124 y1=50 size=1 color="#ffffffff"
+
+# Yards.
+line.draw x0=28 y0=24 x1=44 y1=24 color="#c9dcffff"
+line.draw x0=30 y0=38 x1=46 y1=38 color="#c9dcffff"
+line.draw x0=50 y0=18 x1=70 y1=18 color="#c9dcffff"
+line.draw x0=52 y0=34 x1=72 y1=34 color="#c9dcffff"
+line.draw x0=75 y0=27 x1=93 y1=27 color="#c9dcffff"
+
+# Standing rigging: shrouds from each masthead down to the sheer.
+line.draw x0=35 y0=14 x1=26 y1=57 color="#8fb6ffff"
+line.draw x0=35 y0=14 x1=48 y1=55 color="#8fb6ffff"
+line.draw x0=59 y0=8 x1=46 y1=55 color="#8fb6ffff"
+line.draw x0=59 y0=8 x1=74 y1=54 color="#8fb6ffff"
+line.draw x0=83 y0=18 x1=72 y1=54 color="#8fb6ffff"
+line.draw x0=83 y0=18 x1=98 y1=57 color="#8fb6ffff"
+# Forestay to the bowsprit tip.
+line.draw x0=59 y0=8 x1=124 y1=50 color="#8fb6ffff"
+
+# Gun ports: a run of small filled rectangles along the deck strake.
+rect.draw x0=34 y0=62 x1=36 y1=64 fill=true color="#0b2f6bff"
+rect.draw x0=42 y0=62 x1=44 y1=64 fill=true color="#0b2f6bff"
+rect.draw x0=50 y0=62 x1=52 y1=64 fill=true color="#0b2f6bff"
+rect.draw x0=58 y0=62 x1=60 y1=64 fill=true color="#0b2f6bff"
+rect.draw x0=66 y0=62 x1=68 y1=64 fill=true color="#0b2f6bff"
+rect.draw x0=74 y0=62 x1=76 y1=64 fill=true color="#0b2f6bff"
+rect.draw x0=82 y0=62 x1=84 y1=64 fill=true color="#0b2f6bff"
+rect.draw x0=90 y0=62 x1=92 y1=64 fill=true color="#0b2f6bff"
+
+# ----------------------------------------------------------- Annotation
+layer.add name="Annotation"
+
+# Sheet border.
+rect.draw x0=2 y0=2 x1=125 y1=93 fill=false color="#c9dcffff"
+
+# Name plate, bottom right. The selection is used exactly as a marquee
+# would be in the GUI: constrain a flood fill to the plate's interior
+# without having to trace its outline.
+rect.draw x0=84 y0=80 x1=122 y1=90 fill=false color="#ffffffff"
+select.rect x=85 y=81 width=37 height=9
+fill.bucket x=90 y=85 color="#0b2f6bff"
+select.clear
+
+# Scale bar, bottom left: alternating ticks at 8 px intervals.
+line.draw x0=8 y0=86 x1=56 y1=86 color="#ffffffff"
+line.draw x0=8 y0=83 x1=8 y1=89 color="#ffffffff"
+line.draw x0=24 y0=83 x1=24 y1=89 color="#ffffffff"
+line.draw x0=40 y0=83 x1=40 y1=89 color="#ffffffff"
+line.draw x0=56 y0=83 x1=56 y1=89 color="#ffffffff"
+rect.draw x0=8 y0=84 x1=16 y1=86 fill=true color="#ffffffff"
+rect.draw x0=24 y0=84 x1=32 y1=86 fill=true color="#ffffffff"
+rect.draw x0=40 y0=84 x1=48 y1=86 fill=true color="#ffffffff"
+
+# Frame station ticks along the waterline.
+pixel.set x=30 y=66 color="#ff6b4aff"
+pixel.set x=46 y=66 color="#ff6b4aff"
+pixel.set x=62 y=66 color="#ff6b4aff"
+pixel.set x=78 y=66 color="#ff6b4aff"
+pixel.set x=94 y=66 color="#ff6b4aff"
+
+# Centreline mark at the mainmast.
+pixel.set x=59 y=6 color="#ff6b4aff"
+pixel.set x=58 y=7 color="#ff6b4aff"
+pixel.set x=60 y=7 color="#ff6b4aff"
+
+# Leave the Hull layer active, which is where a reader will want to keep
+# drawing when they open this file.
+layer.select index=2

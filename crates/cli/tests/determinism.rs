@@ -37,3 +37,37 @@ fn replaying_ship_script_twice_produces_byte_identical_png() {
 
     let _ = std::fs::remove_dir_all(&out_dir);
 }
+
+/// AC17, binary level: the Phase 1 dogfood blueprint renders, and renders
+/// byte-identically on two consecutive runs.
+#[test]
+fn rendering_the_blueprint_project_twice_produces_byte_identical_png() {
+    let root = workspace_root();
+    let project = root.join("docs/samples/blueprint.pxcproj");
+    assert!(project.exists(), "blueprint missing at {}", project.display());
+
+    let out_dir =
+        std::env::temp_dir().join(format!("pixelcad-cli-blueprint-test-{}", std::process::id()));
+    std::fs::create_dir_all(&out_dir).unwrap();
+    let bin = env!("CARGO_BIN_EXE_pixelcad-cli");
+
+    let mut renders = Vec::new();
+    for name in ["a.png", "b.png"] {
+        let out = out_dir.join(name);
+        let output = Command::new(bin)
+            .args(["run", project.to_str().unwrap(), "--out", out.to_str().unwrap()])
+            .output()
+            .expect("failed to run pixelcad-cli");
+        assert!(
+            output.status.success(),
+            "pixelcad-cli failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        renders.push(std::fs::read(&out).unwrap());
+    }
+
+    assert_eq!(renders[0], renders[1], "the blueprint must render deterministically");
+    assert!(renders[0].len() > 200, "the render should not be a trivial image");
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+}
