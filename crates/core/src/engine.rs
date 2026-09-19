@@ -96,15 +96,24 @@ impl Default for EngineState {
 /// and a replayable command history.
 #[derive(Debug, Clone)]
 pub struct Engine {
-    /// `states[i]` is the state that exists after executing `commands[0..i]`.
+    /// `states[i]` is the state that exists after executing `steps[0..i]`.
     /// `states[0]` is always the initial (empty) state.
     states: Vec<EngineState>,
-    /// `commands[i]` is the command that produced `states[i + 1]`.
-    commands: Vec<Command>,
+    /// One *undo step* per entry, each holding one or more commands that
+    /// were applied together. `steps[i]` produced `states[i + 1]`.
+    ///
+    /// Phase 0 had one command per undo step. Phase 1 groups them so that a
+    /// single pointer drag — which emits dozens of `brush.stroke` commands —
+    /// is undone by a single Undo, while the serialized script still
+    /// contains every individual command.
+    steps: Vec<Vec<Command>>,
     /// Index into `states` for the currently active state. Everything in
-    /// `commands[cursor..]` has been undone and is kept only so `redo` can
+    /// `steps[cursor..]` has been undone and is kept only so `redo` can
     /// restore it; a fresh `execute` call discards it.
     cursor: usize,
+    /// True between [`Engine::begin_group`] and [`Engine::end_group`]: new
+    /// commands extend `steps[cursor - 1]` instead of starting a new step.
+    group_open: bool,
 }
 
 impl Default for Engine {
@@ -116,7 +125,12 @@ impl Default for Engine {
 impl Engine {
     /// Creates a fresh engine: no document, default palette, empty history.
     pub fn new() -> Self {
-        Self { states: vec![EngineState::default()], commands: Vec::new(), cursor: 0 }
+        Self {
+            states: vec![EngineState::default()],
+            steps: Vec::new(),
+            cursor: 0,
+            group_open: false,
+        }
     }
 
     /// The current document, if `canvas.new` has been executed.
@@ -139,30 +153,84 @@ impl Engine {
         self.states[self.cursor].selection
     }
 
-    /// The commands currently in effect, in execution order (excludes any
-    /// commands undone via [`Engine::undo`] that have not been redone).
-    /// This is exactly what `.pxc` "Save script" should serialize.
-    pub fn history(&self) -> &[Command] {
-        &self.commands[..self.cursor]
+    /// The commands currently in effect, flattened across undo steps, in
+    /// execution order (excludes anything undone via [`Engine::undo`] that
+    /// has not been redone). This is exactly what `.pxc` "Save script"
+    /// serializes — grouping is an undo concern, never a file-format one.
+    pub fn history(&self) -> Vec<Command> {
+        self.steps[..self.cursor].iter().flatten().cloned().collect()
+    }
+
+    /// How many undo steps are currently in effect. Differs from
+    /// `history().len()` whenever any step holds more than one command.
+    pub fn step_count(&self) -> usize {
+        self.cursor
     }
 
     /// Serializes [`Engine::history`] to `.pxc` text.
     pub fn save_script(&self) -> String {
-        serialize_script(self.history())
+        serialize_script(&self.history())
     }
 
-    /// Executes a single command, appending it to history. Any previously
-    /// undone commands beyond the current cursor are discarded (standard
-    /// undo/redo semantics: a new action clears the redo stack).
+    /// Starts a grouped undo step. Every command executed until
+    /// [`Engine::end_group`] becomes part of one step and is undone as one.
+    /// Nesting is not supported: an already-open group is closed first.
+    pub fn begin_group(&mut self) {
+        if self.group_open {
+            self.end_group();
+        }
+        self.states.truncate(self.cursor + 1);
+        self.steps.truncate(self.cursor);
+
+        let carried = self.states[self.cursor].clone();
+        self.states.push(carried);
+        self.steps.push(Vec::new());
+        self.cursor += 1;
+        self.group_open = true;
+    }
+
+    /// Closes the current group. A group in which nothing succeeded leaves
+    /// no undo step behind — clicking the canvas and drawing nothing must
+    /// not create an Undo that appears to do nothing.
+    pub fn end_group(&mut self) {
+        if !self.group_open {
+            return;
+        }
+        self.group_open = false;
+        if self.steps[self.cursor - 1].is_empty() {
+            self.states.pop();
+            self.steps.pop();
+            self.cursor -= 1;
+        }
+    }
+
+    /// Whether a group is currently open.
+    pub fn group_open(&self) -> bool {
+        self.group_open
+    }
+
+    /// Executes a single command. Outside a group this creates its own undo
+    /// step; inside one it extends the open step. Either way, any previously
+    /// undone work beyond the cursor is discarded (standard undo/redo
+    /// semantics: a new action clears the redo stack).
+    ///
+    /// On error nothing is mutated: the command is applied to a clone that
+    /// is only committed on success.
     pub fn execute(&mut self, command: Command) -> Result<(), EngineError> {
         let mut next_state = self.states[self.cursor].clone();
         apply(&mut next_state, &command)?;
 
+        if self.group_open {
+            self.states[self.cursor] = next_state;
+            self.steps[self.cursor - 1].push(command);
+            return Ok(());
+        }
+
         self.states.truncate(self.cursor + 1);
-        self.commands.truncate(self.cursor);
+        self.steps.truncate(self.cursor);
 
         self.states.push(next_state);
-        self.commands.push(command);
+        self.steps.push(vec![command]);
         self.cursor += 1;
         Ok(())
     }
@@ -188,12 +256,13 @@ impl Engine {
     /// Whether [`Engine::redo`] would move (i.e. there is undone history
     /// ahead of the current position).
     pub fn can_redo(&self) -> bool {
-        self.cursor < self.commands.len()
+        !self.group_open && self.cursor < self.steps.len()
     }
 
-    /// Moves one step back in history, if possible. Returns whether it
-    /// moved.
+    /// Moves one *step* back in history, if possible. Returns whether it
+    /// moved. An open group is closed first, so undoing mid-drag is safe.
     pub fn undo(&mut self) -> bool {
+        self.end_group();
         if self.cursor == 0 {
             return false;
         }
@@ -201,10 +270,11 @@ impl Engine {
         true
     }
 
-    /// Moves one step forward in history (re-applying a previously undone
-    /// command), if possible. Returns whether it moved.
+    /// Moves one *step* forward in history (restoring a previously undone
+    /// step), if possible. Returns whether it moved.
     pub fn redo(&mut self) -> bool {
-        if self.cursor >= self.commands.len() {
+        self.end_group();
+        if self.cursor >= self.steps.len() {
             return false;
         }
         self.cursor += 1;
@@ -729,6 +799,108 @@ mod tests {
         for i in 0..=4 {
             assert_eq!(doc.get_pixel(i, i).unwrap(), [255, 255, 255, 255]);
         }
+    }
+
+    #[test]
+    fn a_group_is_one_undo_step_but_many_commands_in_the_script() {
+        let mut e = canvas(8);
+        assert_eq!(e.step_count(), 1, "canvas.new is its own step");
+
+        e.begin_group();
+        for x in 0..5 {
+            e.execute(Command::BrushStroke { x0: x, y0: 0, x1: x, y1: 0, size: 1, color: INK })
+                .unwrap();
+        }
+        e.end_group();
+
+        assert_eq!(e.step_count(), 2, "the whole drag is one undo step");
+        assert_eq!(e.history().len(), 6, "but all six commands are in the script");
+        assert_eq!(painted(&e).len(), 5);
+
+        assert!(e.undo());
+        assert_eq!(painted(&e).len(), 0, "one undo removes the entire stroke");
+        assert_eq!(e.history().len(), 1);
+
+        assert!(e.redo());
+        assert_eq!(painted(&e).len(), 5, "one redo restores the entire stroke");
+        assert_eq!(e.history().len(), 6);
+    }
+
+    #[test]
+    fn an_empty_group_leaves_no_undo_step() {
+        let mut e = canvas(4);
+        let before = e.step_count();
+        e.begin_group();
+        e.end_group();
+        assert_eq!(e.step_count(), before, "a group that did nothing is not undoable");
+        assert!(!e.can_redo());
+    }
+
+    #[test]
+    fn a_group_whose_commands_all_failed_leaves_no_undo_step() {
+        let mut e = canvas(4);
+        let before = e.step_count();
+        e.begin_group();
+        assert!(e.execute(Command::PixelSet { x: 99, y: 99, color: INK }).is_err());
+        e.end_group();
+        assert_eq!(e.step_count(), before);
+    }
+
+    #[test]
+    fn end_group_is_idempotent_and_begin_group_closes_a_dangling_one() {
+        let mut e = canvas(4);
+        e.begin_group();
+        e.execute(Command::PixelSet { x: 0, y: 0, color: INK }).unwrap();
+        // No end_group: starting another group must close this one cleanly.
+        e.begin_group();
+        e.execute(Command::PixelSet { x: 1, y: 0, color: INK }).unwrap();
+        e.end_group();
+        e.end_group(); // idempotent
+
+        assert_eq!(e.step_count(), 3, "canvas.new + two groups");
+        assert!(e.undo());
+        assert_eq!(painted(&e), vec![(0, 0)]);
+    }
+
+    #[test]
+    fn undo_during_an_open_group_closes_it_first() {
+        let mut e = canvas(4);
+        e.begin_group();
+        e.execute(Command::PixelSet { x: 0, y: 0, color: INK }).unwrap();
+        assert!(e.group_open());
+
+        assert!(e.undo());
+        assert!(!e.group_open());
+        assert_eq!(painted(&e).len(), 0, "the in-progress stroke was undone as one step");
+    }
+
+    #[test]
+    fn a_new_group_after_undo_clears_the_redo_stack() {
+        let mut e = canvas(4);
+        e.begin_group();
+        e.execute(Command::PixelSet { x: 0, y: 0, color: INK }).unwrap();
+        e.end_group();
+        e.undo();
+        assert!(e.can_redo());
+
+        e.begin_group();
+        e.execute(Command::PixelSet { x: 1, y: 1, color: INK }).unwrap();
+        e.end_group();
+        assert!(!e.can_redo(), "a new action discards the redo branch");
+        assert_eq!(painted(&e), vec![(1, 1)]);
+    }
+
+    #[test]
+    fn grouped_history_still_round_trips_through_the_parser() {
+        let mut e = canvas(8);
+        e.begin_group();
+        e.execute(Command::BrushStroke { x0: 0, y0: 0, x1: 4, y1: 4, size: 2, color: INK })
+            .unwrap();
+        e.execute(Command::FillBucket { x: 7, y: 7, color: INK }).unwrap();
+        e.end_group();
+
+        let reparsed = parse_script(&e.save_script()).unwrap();
+        assert_eq!(reparsed, e.history(), "grouping must not leak into the file format");
     }
 
     /// Convenience: a fresh engine with an `n x n` canvas.
