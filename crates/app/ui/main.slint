@@ -1,9 +1,14 @@
-import { Button, LineEdit } from "std-widgets.slint";
+import { Button, LineEdit, CheckBox, ScrollView } from "std-widgets.slint";
+
+export struct LayerRow {
+    name: string,
+    visible: bool,
+}
 
 export component AppWindow inherits Window {
     title: "PixelCAD";
-    preferred-width: 760px;
-    preferred-height: 600px;
+    preferred-width: 1080px;
+    preferred-height: 680px;
 
     // --- State pushed in from Rust after every Controller mutation. ---
     in property <image> canvas-image;
@@ -16,9 +21,17 @@ export component AppWindow inherits Window {
     in property <bool> can-undo;
     in property <bool> can-redo;
     in property <string> status-message;
+    in property <[string]> tool-labels;
+    in property <int> selected-tool;
+    in property <int> brush-size;
+    in property <[LayerRow]> layers;
+    in property <int> active-layer;
+    in property <bool> has-selection;
 
     // --- State the UI owns and Rust only reads via a callback argument. ---
     in-out property <string> save-path: "session.pxc";
+    in-out property <string> project-path: "drawing.pxcproj";
+    in-out property <string> swatch-hex: "#1d1d1f";
     property <bool> space-held: false;
 
     // --- Events Rust handles. ---
@@ -28,9 +41,22 @@ export component AppWindow inherits Window {
     callback pointer-released();
     callback canvas-scrolled(float);
     callback palette-clicked(int);
+    callback swatch-applied(string);
+    callback tool-selected(int);
+    callback brush-size-changed(int);
     callback undo-clicked();
     callback redo-clicked();
     callback save-clicked(string);
+    callback save-project-clicked(string);
+    callback open-project-clicked(string);
+    callback layer-add-clicked();
+    callback layer-remove-clicked();
+    callback layer-selected(int);
+    callback layer-visibility-toggled(int);
+    callback selection-cleared();
+    /// A raw key press. Rust owns the whole shortcut table so the mapping is
+    /// testable without a window; the UI only forwards characters.
+    callback key-pressed(string, bool) -> bool;
 
     forward-focus: fs;
 
@@ -38,6 +64,12 @@ export component AppWindow inherits Window {
         key-pressed(event) => {
             if (event.text == Key.Space) {
                 root.space-held = true;
+                return accept;
+            }
+            // `control` covers Ctrl on Linux/Windows; `meta` covers Cmd on
+            // macOS. Both are offered to Rust as one "accelerator" flag so
+            // the shortcut table does not need to know the platform.
+            if (root.key-pressed(event.text, event.modifiers.control || event.modifiers.meta)) {
                 return accept;
             }
             return reject;
@@ -54,6 +86,7 @@ export component AppWindow inherits Window {
             padding: 8px;
             spacing: 8px;
 
+            // ---------------------------------------------------- toolbar
             HorizontalLayout {
                 spacing: 6px;
                 height: 32px;
@@ -68,9 +101,23 @@ export component AppWindow inherits Window {
                     enabled: root.can-redo;
                     clicked => { root.redo-clicked(); }
                 }
+                Rectangle { width: 8px; }
+                project-edit := LineEdit {
+                    text <=> root.project-path;
+                    width: 170px;
+                }
+                open-btn := Button {
+                    text: "Open";
+                    clicked => { root.open-project-clicked(root.project-path); }
+                }
+                save-project-btn := Button {
+                    text: "Save project";
+                    clicked => { root.save-project-clicked(root.project-path); }
+                }
+                Rectangle { width: 8px; }
                 path-edit := LineEdit {
                     text <=> root.save-path;
-                    width: 180px;
+                    width: 150px;
                 }
                 save-btn := Button {
                     text: "Save script";
@@ -79,21 +126,58 @@ export component AppWindow inherits Window {
                 Text {
                     text: root.status-message;
                     vertical-alignment: center;
+                    overflow: elide;
                 }
             }
 
             HorizontalLayout {
                 spacing: 12px;
 
+                // ------------------------------------------- left sidebar
                 VerticalLayout {
-                    spacing: 4px;
+                    spacing: 8px;
                     alignment: start;
+                    width: 200px;
 
+                    Text { text: "Tools"; font-weight: 700; }
+                    for label[i] in root.tool-labels: tool-btn := Button {
+                        text: label;
+                        primary: root.selected-tool == i;
+                        clicked => { root.tool-selected(i); }
+                    }
+
+                    Rectangle { height: 4px; }
+
+                    HorizontalLayout {
+                        spacing: 4px;
+                        Text {
+                            text: "Brush " + root.brush-size;
+                            vertical-alignment: center;
+                        }
+                        brush-down-btn := Button {
+                            text: "-";
+                            clicked => { root.brush-size-changed(root.brush-size - 1); }
+                        }
+                        brush-up-btn := Button {
+                            text: "+";
+                            clicked => { root.brush-size-changed(root.brush-size + 1); }
+                        }
+                    }
+
+                    deselect-btn := Button {
+                        text: "Clear selection";
+                        enabled: root.has-selection;
+                        clicked => { root.selection-cleared(); }
+                    }
+
+                    Rectangle { height: 4px; }
+
+                    Text { text: "Palette"; font-weight: 700; }
                     HorizontalLayout {
                         spacing: 2px;
                         for i in 8: Rectangle {
-                            width: 24px;
-                            height: 24px;
+                            width: 22px;
+                            height: 22px;
                             background: root.palette-colors[i];
                             border-width: root.selected-index == i ? 3px : 1px;
                             border-color: root.selected-index == i ? black : #808080;
@@ -106,8 +190,8 @@ export component AppWindow inherits Window {
                     HorizontalLayout {
                         spacing: 2px;
                         for i in 8: Rectangle {
-                            width: 24px;
-                            height: 24px;
+                            width: 22px;
+                            height: 22px;
                             background: root.palette-colors[i + 8];
                             border-width: root.selected-index == (i + 8) ? 3px : 1px;
                             border-color: root.selected-index == (i + 8) ? black : #808080;
@@ -117,11 +201,22 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
+                    HorizontalLayout {
+                        spacing: 4px;
+                        hex-edit := LineEdit {
+                            text <=> root.swatch-hex;
+                            width: 100px;
+                        }
+                        apply-swatch-btn := Button {
+                            text: "Set";
+                            clicked => { root.swatch-applied(root.swatch-hex); }
+                        }
+                    }
                 }
 
+                // ------------------------------------------------- canvas
                 viewport := Rectangle {
-                    width: 512px;
-                    height: 512px;
+                    min-width: 512px;
                     clip: true;
                     background: #2b2b2b;
 
@@ -159,6 +254,62 @@ export component AppWindow inherits Window {
                         scroll-event(event) => {
                             root.canvas-scrolled(event.delta-y / 1px);
                             return accept;
+                        }
+                    }
+                }
+
+                // ------------------------------------------ right sidebar
+                VerticalLayout {
+                    spacing: 6px;
+                    alignment: start;
+                    width: 190px;
+
+                    Text { text: "Layers (top first)"; font-weight: 700; }
+                    layer-add-btn := Button {
+                        text: "Add layer";
+                        clicked => { root.layer-add-clicked(); }
+                    }
+                    layer-remove-btn := Button {
+                        text: "Delete layer";
+                        enabled: root.layers.length > 1;
+                        clicked => { root.layer-remove-clicked(); }
+                    }
+
+                    // Displayed top-first, which is the opposite of the
+                    // model's bottom-first order; Rust converts the index.
+                    for row[i] in root.layers: Rectangle {
+                        height: 26px;
+                        background: root.active-layer == (root.layers.length - 1 - i)
+                            ? #4a6fa5 : transparent;
+                        border-width: 1px;
+                        border-color: #808080;
+
+                        HorizontalLayout {
+                            padding-left: 4px;
+                            padding-right: 4px;
+                            spacing: 4px;
+
+                            layer-visible-box := CheckBox {
+                                checked: row.visible;
+                                toggled => {
+                                    root.layer-visibility-toggled(root.layers.length - 1 - i);
+                                }
+                            }
+                            Text {
+                                text: row.name;
+                                vertical-alignment: center;
+                                overflow: elide;
+                                horizontal-stretch: 1;
+                            }
+                        }
+
+                        // Offset past the visibility checkbox so that
+                        // clicking the eye toggles it rather than merely
+                        // selecting the row.
+                        layer-row-touch := TouchArea {
+                            x: 34px;
+                            width: parent.width - 34px;
+                            clicked => { root.layer-selected(root.layers.length - 1 - i); }
                         }
                     }
                 }
