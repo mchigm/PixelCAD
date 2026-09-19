@@ -137,6 +137,18 @@ impl Engine {
         Ok(())
     }
 
+    /// Whether [`Engine::undo`] would move (i.e. there is history before the
+    /// current position).
+    pub fn can_undo(&self) -> bool {
+        self.cursor > 0
+    }
+
+    /// Whether [`Engine::redo`] would move (i.e. there is undone history
+    /// ahead of the current position).
+    pub fn can_redo(&self) -> bool {
+        self.cursor < self.commands.len()
+    }
+
     /// Moves one step back in history, if possible. Returns whether it
     /// moved.
     pub fn undo(&mut self) -> bool {

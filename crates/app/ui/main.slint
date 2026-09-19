@@ -1,0 +1,168 @@
+import { Button, LineEdit } from "std-widgets.slint";
+
+export component AppWindow inherits Window {
+    title: "PixelCAD";
+    preferred-width: 760px;
+    preferred-height: 600px;
+
+    // --- State pushed in from Rust after every Controller mutation. ---
+    in property <image> canvas-image;
+    in property <int> canvas-display-width;
+    in property <int> canvas-display-height;
+    in property <float> pan-x;
+    in property <float> pan-y;
+    in property <[color]> palette-colors;
+    in property <int> selected-index;
+    in property <bool> can-undo;
+    in property <bool> can-redo;
+    in property <string> status-message;
+
+    // --- State the UI owns and Rust only reads via a callback argument. ---
+    in-out property <string> save-path: "session.pxc";
+    property <bool> space-held: false;
+
+    // --- Events Rust handles. ---
+    callback pencil-down(float, float);
+    callback pan-down(float, float);
+    callback pointer-moved(float, float);
+    callback pointer-released();
+    callback canvas-scrolled(float);
+    callback palette-clicked(int);
+    callback undo-clicked();
+    callback redo-clicked();
+    callback save-clicked(string);
+
+    forward-focus: fs;
+
+    fs := FocusScope {
+        key-pressed(event) => {
+            if (event.text == Key.Space) {
+                root.space-held = true;
+                return accept;
+            }
+            return reject;
+        }
+        key-released(event) => {
+            if (event.text == Key.Space) {
+                root.space-held = false;
+                return accept;
+            }
+            return reject;
+        }
+
+        VerticalLayout {
+            padding: 8px;
+            spacing: 8px;
+
+            HorizontalLayout {
+                spacing: 6px;
+                height: 32px;
+
+                undo-btn := Button {
+                    text: "Undo";
+                    enabled: root.can-undo;
+                    clicked => { root.undo-clicked(); }
+                }
+                redo-btn := Button {
+                    text: "Redo";
+                    enabled: root.can-redo;
+                    clicked => { root.redo-clicked(); }
+                }
+                path-edit := LineEdit {
+                    text <=> root.save-path;
+                    width: 180px;
+                }
+                save-btn := Button {
+                    text: "Save script";
+                    clicked => { root.save-clicked(root.save-path); }
+                }
+                Text {
+                    text: root.status-message;
+                    vertical-alignment: center;
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 12px;
+
+                VerticalLayout {
+                    spacing: 4px;
+                    alignment: start;
+
+                    HorizontalLayout {
+                        spacing: 2px;
+                        for i in 8: Rectangle {
+                            width: 24px;
+                            height: 24px;
+                            background: root.palette-colors[i];
+                            border-width: root.selected-index == i ? 3px : 1px;
+                            border-color: root.selected-index == i ? black : #808080;
+
+                            swatch-row1 := TouchArea {
+                                clicked => { root.palette-clicked(i); }
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 2px;
+                        for i in 8: Rectangle {
+                            width: 24px;
+                            height: 24px;
+                            background: root.palette-colors[i + 8];
+                            border-width: root.selected-index == (i + 8) ? 3px : 1px;
+                            border-color: root.selected-index == (i + 8) ? black : #808080;
+
+                            swatch-row2 := TouchArea {
+                                clicked => { root.palette-clicked(i + 8); }
+                            }
+                        }
+                    }
+                }
+
+                viewport := Rectangle {
+                    width: 512px;
+                    height: 512px;
+                    clip: true;
+                    background: #2b2b2b;
+
+                    Image {
+                        source: root.canvas-image;
+                        image-rendering: pixelated;
+                        x: root.pan-x * 1px;
+                        y: root.pan-y * 1px;
+                        width: root.canvas-display-width * 1px;
+                        height: root.canvas-display-height * 1px;
+                    }
+
+                    canvas-touch := TouchArea {
+                        width: 100%;
+                        height: 100%;
+
+                        pointer-event(event) => {
+                            if (event.kind == PointerEventKind.down) {
+                                if (event.button == PointerEventButton.left) {
+                                    if (root.space-held) {
+                                        root.pan-down(self.mouse-x / 1px, self.mouse-y / 1px);
+                                    } else {
+                                        root.pencil-down(self.mouse-x / 1px, self.mouse-y / 1px);
+                                    }
+                                } else if (event.button == PointerEventButton.right) {
+                                    root.pan-down(self.mouse-x / 1px, self.mouse-y / 1px);
+                                }
+                            } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                                root.pointer-released();
+                            }
+                        }
+                        moved => {
+                            root.pointer-moved(self.mouse-x / 1px, self.mouse-y / 1px);
+                        }
+                        scroll-event(event) => {
+                            root.canvas-scrolled(event.delta-y / 1px);
+                            return accept;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
