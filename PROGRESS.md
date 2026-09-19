@@ -1,8 +1,8 @@
 # PROGRESS — PixelCAD Phase 0: Bootstrap & Command Engine
 
-**Last updated:** 2026-09-19T00:30:00+08:00
-**Current task:** Task 3 — Command engine (pixelcad-core)
-**Completed tasks:** 1, 2
+**Last updated:** 2026-09-19T01:00:00+08:00
+**Current task:** Task 4 — Headless CLI (pixelcad-cli)
+**Completed tasks:** 1, 2, 3
 **Current mode:** A
 
 ## Log
@@ -36,6 +36,15 @@
 - Mode D regression check: `cargo build` (workspace) and `cargo test` (workspace) both pass after this change to shared infrastructure (`core` is depended on by `app` and `cli`).
 - Files modified: `crates/core/Cargo.toml` (added `thiserror`), `crates/core/src/document.rs` (new), `crates/core/src/lib.rs`.
 - Committed: `bcd8edf` "Task 2: document model (pixelcad-core)".
+
+### 2026-09-19T01:00:00+08:00 — Task 3 complete
+- Implemented: `crates/core/src/command.rs` (typed `Command` enum: `CanvasNew`, `PixelSet`, `LineDraw`, `PaletteSet`; hex color parse/format helpers); `crates/core/src/parser.rs` (tokenizer respecting quoted values, `parse_line`/`parse_script`/`serialize_command`/`serialize_script`, line-numbered `ParseError`, `#`-prefixed full-line comments); `crates/core/src/engine.rs` (`Engine` with snapshot-based undo/redo via a `states`/`commands`/`cursor` history model, fixed 16-slot palette with `DEFAULT_PALETTE`, Bresenham `line.draw`, `save_script()` producing `.pxc` text from active history only).
+- Tests: 26 passed / 0 failed (`cargo test -p pixelcad-core`) — includes parser round-trip for all 4 command kinds and a full script, comment/blank-line skipping, line-numbered error reporting, engine undo/redo semantics (including "new action after undo clears redo"), Bresenham correctness, and the Task 3 determinism test: parsing an inline sample script and replaying it through two independent `Engine`s yields identical `document_hash()`.
+- Mode used: A (sequential). One self-inflicted syntax snag: initial raw-string literal `r#"..."#` for the embedded sample script terminated early because the script body itself contains the two-character sequence `"#` (from `color="#1d1d1f"`); fixed by using `r##"..."##`. Caught immediately by the compiler, not a Mode B pivot.
+- Deviations from PLAN.md: none in scope. Added `PaletteSet` state to the engine's snapshot (not just the document) so palette changes are also undoable/redoable and round-trip through `save_script`; PLAN.md's Command enum already listed `PaletteSet`, this just decides where its state lives.
+- Mode D regression check: `cargo build` (workspace) and `cargo test --workspace` both pass. `cargo tree -p pixelcad-core` shows only `thiserror` (+ its proc-macro build deps) — confirms criterion 6 (no UI/GPU/slint dependency in `core`) holds after this change.
+- Files modified: `crates/core/src/{command.rs,parser.rs,engine.rs}` (new), `crates/core/src/lib.rs` (module wiring + re-exports).
+- Committed: (see next commit in this session).
 
 ## Current Blockers
 [Empty — I2 is a non-blocking open question, see Log; Tasks 2-7 proceed regardless.]

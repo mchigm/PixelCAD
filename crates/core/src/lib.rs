@@ -5,6 +5,12 @@
 //! execution, shared verbatim by the GUI shell (`pixelcad-app`) and the
 //! headless CLI (`pixelcad-cli`).
 
+pub mod command;
 pub mod document;
+pub mod engine;
+pub mod parser;
 
+pub use command::Command;
 pub use document::{Color, Document, DocumentError, TRANSPARENT};
+pub use engine::{Engine, EngineError, DEFAULT_PALETTE, PALETTE_SIZE};
+pub use parser::{parse_line, parse_script, serialize_command, serialize_script, ParseError};
