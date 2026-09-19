@@ -1,8 +1,8 @@
 # PROGRESS — PixelCAD Phase 0: Bootstrap & Command Engine
 
-**Last updated:** 2026-09-19T01:00:00+08:00
-**Current task:** Task 4 — Headless CLI (pixelcad-cli)
-**Completed tasks:** 1, 2, 3
+**Last updated:** 2026-09-19T01:30:00+08:00
+**Current task:** Task 5 — Slint shell (pixelcad-app)
+**Completed tasks:** 1, 2, 3, 4
 **Current mode:** A
 
 ## Log
@@ -45,6 +45,16 @@
 - Mode D regression check: `cargo build` (workspace) and `cargo test --workspace` both pass. `cargo tree -p pixelcad-core` shows only `thiserror` (+ its proc-macro build deps) — confirms criterion 6 (no UI/GPU/slint dependency in `core`) holds after this change.
 - Files modified: `crates/core/src/{command.rs,parser.rs,engine.rs}` (new), `crates/core/src/lib.rs` (module wiring + re-exports).
 - Committed: `2ab06fa` "Task 3: command engine (pixelcad-core)".
+
+### 2026-09-19T01:30:00+08:00 — Task 4 complete
+- Implemented: `crates/cli/src/main.rs` — `pixelcad-cli run <script.pxc> --out <output.png>`; reads the script, parses it via `pixelcad_core::parse_script`, replays via `Engine::execute_all`, encodes the resulting `Document` to PNG via the `png` crate (explicit RGBA8/8-bit, no tEXt/tIME metadata, so output depends only on width/height/pixels). `docs/samples/ship.pxc` — the dogfood artifact: a 64x64 trapezoid hull, mast, sail yard, masthead flag, and porthole, using all four command kinds plus comments.
+- Tests: workspace-wide `cargo test --workspace` = 28 passed / 0 failed. Added `crates/core/tests/ship_determinism.rs` (`include_str!`s `docs/samples/ship.pxc`, replays it through two independent `Engine`s, asserts `document_hash()` equal — matches PLAN.md's acceptance-criterion wording literally) and `crates/cli/tests/determinism.rs` (invokes the compiled `pixelcad-cli` binary twice via `CARGO_BIN_EXE_pixelcad-cli`, asserts the two PNG files are byte-identical — the actual CLI acceptance criterion, exercised end-to-end).
+- Manual verification: `cargo run -p pixelcad-cli -- run docs/samples/ship.pxc --out out.png` twice, `shasum -a 256` on both outputs — identical digest `bde008684f8384379e33f514d15d4ca4c1aed97798d52a08bbb1cccd6f781232`. Both manual outputs deleted afterward (gitignored via `out.png` pattern anyway).
+- Mode used: A (sequential; no blockers, no failed attempts).
+- Deviations from PLAN.md: chose the low-level `png` crate over `image` for the PNG encode step — gives explicit control over color type/bit depth/metadata, which is the safer choice for a determinism guarantee than a higher-level crate's defaults.
+- Mode D regression check: `cargo tree -p pixelcad-core` re-verified — still only `thiserror` (+ build-time proc-macro deps); adding `png` to `crates/cli` does not touch `core`'s dependency graph.
+- Files modified: `crates/cli/Cargo.toml` (added `png`), `crates/cli/src/main.rs`, `crates/cli/tests/determinism.rs` (new), `crates/core/tests/ship_determinism.rs` (new), `docs/samples/ship.pxc` (new).
+- Committed: (recorded in next commit).
 
 ## Current Blockers
 [Empty — I2 is a non-blocking open question, see Log; Tasks 2-7 proceed regardless.]

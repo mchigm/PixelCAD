@@ -1,0 +1,32 @@
+# ship.pxc — Phase 0 dogfood artifact.
+#
+# A simple ship-hull outline: a trapezoid hull, a mast, a sail yard, a
+# flag, and a porthole. Deliberately small and hand-checkable so the
+# determinism test (replay twice -> identical hash/PNG) is meaningful.
+# Replay with:
+#   cargo run -p pixelcad-cli -- run docs/samples/ship.pxc --out out.png
+
+canvas.new width=64 height=64
+
+# Palette (metadata only; does not touch pixels).
+palette.set index=0 color="#1d1d1f"
+palette.set index=1 color="#8b4513"
+palette.set index=2 color="#ff0000"
+
+# Hull outline (closed trapezoid).
+line.draw x0=8 y0=40 x1=56 y1=40 color="#1d1d1f"
+line.draw x0=8 y0=40 x1=20 y1=52 color="#1d1d1f"
+line.draw x0=20 y0=52 x1=44 y1=52 color="#1d1d1f"
+line.draw x0=44 y0=52 x1=56 y1=40 color="#1d1d1f"
+
+# Mast and sail yard.
+line.draw x0=32 y0=40 x1=32 y1=12 color="#8b4513"
+line.draw x0=22 y0=18 x1=42 y1=18 color="#8b4513"
+
+# Flag at the masthead.
+pixel.set x=33 y=12 color="#ff0000"
+pixel.set x=34 y=12 color="#ff0000"
+pixel.set x=33 y=13 color="#ff0000"
+
+# Porthole.
+pixel.set x=32 y=46 color="#ffffff"

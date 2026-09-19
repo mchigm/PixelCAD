@@ -11,3 +11,4 @@ path = "src/main.rs"
 
 [dependencies]
 pixelcad-core = { path = "../core" }
+png = "0.17"
