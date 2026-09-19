@@ -46,17 +46,49 @@ pub enum EngineError {
     Document(#[from] DocumentError),
 }
 
+/// A rectangular selection, in document pixel coordinates.
+///
+/// While a selection exists, every pixel-writing command is clipped to it.
+/// An empty rectangle (zero width or height) selects nothing, which makes
+/// drawing a no-op rather than an error — the same thing a real editor does
+/// when you draw outside a marquee.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SelectionRect {
+    pub x: i64,
+    pub y: i64,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl SelectionRect {
+    pub fn contains(&self, x: i64, y: i64) -> bool {
+        x >= self.x
+            && y >= self.y
+            && x < self.x + self.width as i64
+            && y < self.y + self.height as i64
+    }
+}
+
 /// The full engine state at one point in history: the document (if a canvas
-/// has been created) and the palette.
+/// has been created), the palette, the active drawing colour, and the
+/// current selection. All four are snapshotted together, so undo restores
+/// tool state as faithfully as it restores pixels.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EngineState {
     document: Option<Document>,
     palette: [Color; PALETTE_SIZE],
+    current_color: Color,
+    selection: Option<SelectionRect>,
 }
 
 impl Default for EngineState {
     fn default() -> Self {
-        Self { document: None, palette: DEFAULT_PALETTE }
+        Self {
+            document: None,
+            palette: DEFAULT_PALETTE,
+            current_color: DEFAULT_PALETTE[0],
+            selection: None,
+        }
     }
 }
 
@@ -95,6 +127,16 @@ impl Engine {
     /// The current palette.
     pub fn palette(&self) -> &[Color; PALETTE_SIZE] {
         &self.states[self.cursor].palette
+    }
+
+    /// The active drawing colour (set by `color.set` / `color.pick`).
+    pub fn current_color(&self) -> Color {
+        self.states[self.cursor].current_color
+    }
+
+    /// The active rectangular selection, if any.
+    pub fn selection(&self) -> Option<SelectionRect> {
+        self.states[self.cursor].selection
     }
 
     /// The commands currently in effect, in execution order (excludes any
@@ -185,14 +227,15 @@ fn apply(state: &mut EngineState, command: &Command) -> Result<(), EngineError> 
             Ok(())
         }
         Command::PixelSet { x, y, color } => {
+            let selection = state.selection;
             let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
-            doc.set_pixel(x, y, color)?;
-            Ok(())
+            write_strict(doc, selection, x, y, color)
         }
         Command::LineDraw { x0, y0, x1, y1, color } => {
+            let selection = state.selection;
             let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
             for (x, y) in bresenham_points(x0, y0, x1, y1) {
-                doc.set_pixel(x, y, color)?;
+                write_strict(doc, selection, x, y, color)?;
             }
             Ok(())
         }
@@ -239,7 +282,173 @@ fn apply(state: &mut EngineState, command: &Command) -> Result<(), EngineError> 
             doc.set_layer_opacity(index, value)?;
             Ok(())
         }
+        Command::ColorSet { color } => {
+            state.current_color = color;
+            Ok(())
+        }
+        Command::ColorPick { x, y } => {
+            let doc = state.document.as_ref().ok_or(EngineError::NoCanvas)?;
+            state.current_color = doc.composited_pixel(x, y)?;
+            Ok(())
+        }
+        Command::SelectRect { x, y, width, height } => {
+            state.selection = Some(SelectionRect { x, y, width, height });
+            Ok(())
+        }
+        Command::SelectClear => {
+            state.selection = None;
+            Ok(())
+        }
+        Command::BrushStroke { x0, y0, x1, y1, size, color } => {
+            let selection = state.selection;
+            let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
+            let size = size.max(1) as i64;
+            // Centre the square on the path point. For even sizes the extra
+            // pixel goes right/down; fixing the rule here (rather than
+            // rounding) keeps the result identical on every platform.
+            let lo = -((size - 1) / 2);
+            let hi = size / 2;
+            for (px, py) in bresenham_points(x0, y0, x1, y1) {
+                for dy in lo..=hi {
+                    for dx in lo..=hi {
+                        write_lenient(doc, selection, px + dx, py + dy, color);
+                    }
+                }
+            }
+            Ok(())
+        }
+        Command::RectDraw { x0, y0, x1, y1, fill, color } => {
+            let selection = state.selection;
+            let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
+            let (left, right) = (x0.min(x1), x0.max(x1));
+            let (top, bottom) = (y0.min(y1), y0.max(y1));
+            for y in top..=bottom {
+                for x in left..=right {
+                    let on_edge = x == left || x == right || y == top || y == bottom;
+                    if fill || on_edge {
+                        write_lenient(doc, selection, x, y, color);
+                    }
+                }
+            }
+            Ok(())
+        }
+        Command::FillBucket { x, y, color } => {
+            let selection = state.selection;
+            let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
+            flood_fill(doc, selection, x, y, color);
+            Ok(())
+        }
     }
+}
+
+/// 4-connected flood fill on the active layer.
+///
+/// Deterministic by construction: an explicit LIFO stack (no recursion, so
+/// no stack overflow on a large canvas), a fixed neighbour order, and a
+/// `visited` bitmap keyed by linear pixel index. The target colour is the
+/// active layer's *own* pixel at the seed, not the composite — filling acts
+/// on the layer you are drawing on, which is what every pixel editor does.
+///
+/// Terminates in every case, including the degenerate one where the fill
+/// colour already equals the target colour (the `visited` set, not a colour
+/// comparison, is what bounds the walk).
+fn flood_fill(
+    doc: &mut Document,
+    selection: Option<SelectionRect>,
+    seed_x: i64,
+    seed_y: i64,
+    color: Color,
+) {
+    if !doc.in_bounds(seed_x, seed_y) {
+        return;
+    }
+    let target = match doc.get_pixel(seed_x, seed_y) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    let width = doc.width() as i64;
+    let height = doc.height() as i64;
+    let mut visited = vec![false; (width * height) as usize];
+    let mut stack = vec![(seed_x, seed_y)];
+
+    while let Some((x, y)) = stack.pop() {
+        if x < 0 || y < 0 || x >= width || y >= height {
+            continue;
+        }
+        let idx = (y * width + x) as usize;
+        if visited[idx] {
+            continue;
+        }
+        visited[idx] = true;
+
+        // A selection is a hard wall, not just a write mask: the fill region
+        // is bounded by the marquee, so it cannot leak around it and
+        // reappear elsewhere inside the selection.
+        if let Some(rect) = selection {
+            if !rect.contains(x, y) {
+                continue;
+            }
+        }
+        if doc.get_pixel(x, y).ok() != Some(target) {
+            continue;
+        }
+        write_lenient(doc, selection, x, y, color);
+
+        // Fixed neighbour order: right, left, down, up.
+        stack.push((x + 1, y));
+        stack.push((x - 1, y));
+        stack.push((x, y + 1));
+        stack.push((x, y - 1));
+    }
+}
+
+/// Writes one pixel, honouring the selection, and **erroring** if the
+/// coordinate is outside the canvas.
+///
+/// Used by the precise commands (`pixel.set`, `line.draw`) where an
+/// out-of-canvas coordinate is a genuine authoring mistake worth reporting,
+/// and where Phase 0 already behaved this way.
+fn write_strict(
+    doc: &mut Document,
+    selection: Option<SelectionRect>,
+    x: i64,
+    y: i64,
+    color: Color,
+) -> Result<(), EngineError> {
+    if let Some(rect) = selection {
+        if !rect.contains(x, y) {
+            // Masked out by the selection. Not an error: this is exactly
+            // what a marquee is for.
+            return Ok(());
+        }
+    }
+    doc.set_pixel(x, y, color)?;
+    Ok(())
+}
+
+/// Writes one pixel, honouring the selection, and **silently skipping**
+/// coordinates outside the canvas.
+///
+/// Used by the area commands (`brush.stroke`, `rect.draw`, `fill.bucket`,
+/// `image.import`) whose footprint legitimately spills past the edge — a
+/// size-5 brush dragged along the border must not abort the whole stroke.
+fn write_lenient(
+    doc: &mut Document,
+    selection: Option<SelectionRect>,
+    x: i64,
+    y: i64,
+    color: Color,
+) {
+    if !doc.in_bounds(x, y) {
+        return;
+    }
+    if let Some(rect) = selection {
+        if !rect.contains(x, y) {
+            return;
+        }
+    }
+    let _ = doc.set_pixel(x, y, color);
 }
 
 /// Computes every integer point on the line from `(x0, y0)` to `(x1, y1)`
@@ -412,6 +621,98 @@ mod tests {
     }
 
     #[test]
+    fn color_set_and_pick_drive_the_active_colour() {
+        let mut engine = Engine::new();
+        assert_eq!(engine.current_color(), DEFAULT_PALETTE[0]);
+
+        engine.execute(Command::CanvasNew { width: 4, height: 4 }).unwrap();
+        engine.execute(Command::ColorSet { color: [10, 20, 30, 255] }).unwrap();
+        assert_eq!(engine.current_color(), [10, 20, 30, 255]);
+
+        engine.execute(Command::PixelSet { x: 2, y: 2, color: [99, 88, 77, 255] }).unwrap();
+        engine.execute(Command::ColorPick { x: 2, y: 2 }).unwrap();
+        assert_eq!(engine.current_color(), [99, 88, 77, 255], "eyedropper reads the canvas");
+
+        engine.execute(Command::ColorPick { x: 0, y: 0 }).unwrap();
+        assert_eq!(engine.current_color(), [0, 0, 0, 0], "picking empty canvas yields transparent");
+    }
+
+    #[test]
+    fn color_pick_reads_the_composite_not_the_active_layer() {
+        let mut engine = Engine::new();
+        engine.execute(Command::CanvasNew { width: 1, height: 1 }).unwrap();
+        engine.execute(Command::PixelSet { x: 0, y: 0, color: [7, 8, 9, 255] }).unwrap();
+        engine.execute(Command::LayerAdd { name: "top".to_string() }).unwrap();
+        // The active layer is empty here; the eyedropper must still see what
+        // the user sees.
+        engine.execute(Command::ColorPick { x: 0, y: 0 }).unwrap();
+        assert_eq!(engine.current_color(), [7, 8, 9, 255]);
+    }
+
+    #[test]
+    fn color_pick_out_of_bounds_errors() {
+        let mut engine = Engine::new();
+        engine.execute(Command::CanvasNew { width: 2, height: 2 }).unwrap();
+        assert!(matches!(
+            engine.execute(Command::ColorPick { x: 5, y: 0 }),
+            Err(EngineError::Document(DocumentError::OutOfBounds { .. }))
+        ));
+    }
+
+    #[test]
+    fn selection_clips_pixel_and_line_writes() {
+        let mut engine = Engine::new();
+        engine.execute(Command::CanvasNew { width: 8, height: 8 }).unwrap();
+        engine.execute(Command::SelectRect { x: 2, y: 2, width: 3, height: 3 }).unwrap();
+
+        let ink = [255, 0, 0, 255];
+        // A line crossing the whole canvas through the selection band.
+        engine.execute(Command::LineDraw { x0: 0, y0: 3, x1: 7, y1: 3, color: ink }).unwrap();
+
+        let doc = engine.document().unwrap();
+        for x in 0..8i64 {
+            let expected = if (2..5).contains(&x) { ink } else { [0, 0, 0, 0] };
+            assert_eq!(doc.get_pixel(x, 3).unwrap(), expected, "at x={x}");
+        }
+
+        // A single pixel.set outside the marquee is masked, not an error.
+        engine.execute(Command::PixelSet { x: 7, y: 7, color: ink }).unwrap();
+        assert_eq!(engine.document().unwrap().get_pixel(7, 7).unwrap(), [0, 0, 0, 0]);
+
+        // Clearing the selection restores unrestricted drawing.
+        engine.execute(Command::SelectClear).unwrap();
+        assert_eq!(engine.selection(), None);
+        engine.execute(Command::PixelSet { x: 7, y: 7, color: ink }).unwrap();
+        assert_eq!(engine.document().unwrap().get_pixel(7, 7).unwrap(), ink);
+    }
+
+    #[test]
+    fn out_of_canvas_writes_still_error_for_precise_commands() {
+        let mut engine = Engine::new();
+        engine.execute(Command::CanvasNew { width: 4, height: 4 }).unwrap();
+        assert!(matches!(
+            engine.execute(Command::PixelSet { x: 9, y: 0, color: [1, 1, 1, 1] }),
+            Err(EngineError::Document(DocumentError::OutOfBounds { .. }))
+        ));
+    }
+
+    #[test]
+    fn undo_restores_the_previous_selection_and_colour() {
+        let mut engine = Engine::new();
+        engine.execute(Command::CanvasNew { width: 4, height: 4 }).unwrap();
+        engine.execute(Command::ColorSet { color: [1, 2, 3, 4] }).unwrap();
+        engine.execute(Command::SelectRect { x: 0, y: 0, width: 2, height: 2 }).unwrap();
+        assert!(engine.selection().is_some());
+
+        assert!(engine.undo());
+        assert_eq!(engine.selection(), None, "selection is snapshotted state");
+        assert_eq!(engine.current_color(), [1, 2, 3, 4]);
+
+        assert!(engine.undo());
+        assert_eq!(engine.current_color(), DEFAULT_PALETTE[0]);
+    }
+
+    #[test]
     fn line_draw_sets_every_bresenham_point() {
         let mut engine = Engine::new();
         engine.execute(Command::CanvasNew { width: 10, height: 10 }).unwrap();
@@ -428,6 +729,201 @@ mod tests {
         for i in 0..=4 {
             assert_eq!(doc.get_pixel(i, i).unwrap(), [255, 255, 255, 255]);
         }
+    }
+
+    /// Convenience: a fresh engine with an `n x n` canvas.
+    fn canvas(n: u32) -> Engine {
+        let mut e = Engine::new();
+        e.execute(Command::CanvasNew { width: n, height: n }).unwrap();
+        e
+    }
+
+    /// Every non-transparent pixel of the active layer, sorted — a compact,
+    /// order-independent way to assert an exact drawing result.
+    fn painted(engine: &Engine) -> Vec<(i64, i64)> {
+        let doc = engine.document().unwrap();
+        let mut out = Vec::new();
+        for y in 0..doc.height() as i64 {
+            for x in 0..doc.width() as i64 {
+                if doc.get_pixel(x, y).unwrap()[3] != 0 {
+                    out.push((x, y));
+                }
+            }
+        }
+        out
+    }
+
+    const INK: Color = [0x11, 0x22, 0x33, 0xff];
+
+    #[test]
+    fn brush_size_one_behaves_like_the_pencil() {
+        let mut e = canvas(8);
+        e.execute(Command::BrushStroke { x0: 1, y0: 1, x1: 3, y1: 1, size: 1, color: INK })
+            .unwrap();
+        assert_eq!(painted(&e), vec![(1, 1), (2, 1), (3, 1)]);
+    }
+
+    #[test]
+    fn brush_size_three_paints_a_three_by_three_block_per_point() {
+        let mut e = canvas(8);
+        e.execute(Command::BrushStroke { x0: 4, y0: 4, x1: 4, y1: 4, size: 3, color: INK })
+            .unwrap();
+        let mut expected = Vec::new();
+        for y in 3..=5 {
+            for x in 3..=5 {
+                expected.push((x, y));
+            }
+        }
+        assert_eq!(painted(&e), expected);
+    }
+
+    #[test]
+    fn a_wide_brush_at_the_canvas_edge_clips_instead_of_failing() {
+        let mut e = canvas(4);
+        // Centred on (0,0) with size 5, most of the footprint is off-canvas.
+        e.execute(Command::BrushStroke { x0: 0, y0: 0, x1: 0, y1: 0, size: 5, color: INK })
+            .unwrap();
+        assert_eq!(painted(&e), vec![(0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1), (0, 2), (1, 2), (2, 2)]);
+    }
+
+    #[test]
+    fn the_eraser_is_a_transparent_brush_stroke() {
+        let mut e = canvas(4);
+        e.execute(Command::RectDraw { x0: 0, y0: 0, x1: 3, y1: 3, fill: true, color: INK })
+            .unwrap();
+        assert_eq!(painted(&e).len(), 16);
+
+        e.execute(Command::BrushStroke {
+            x0: 1,
+            y0: 1,
+            x1: 2,
+            y1: 1,
+            size: 1,
+            color: crate::document::TRANSPARENT,
+        })
+        .unwrap();
+        assert_eq!(e.document().unwrap().get_pixel(1, 1).unwrap(), [0, 0, 0, 0]);
+        assert_eq!(e.document().unwrap().get_pixel(2, 1).unwrap(), [0, 0, 0, 0]);
+        assert_eq!(painted(&e).len(), 14, "exactly two pixels erased");
+    }
+
+    #[test]
+    fn outlined_rectangle_leaves_its_interior_empty() {
+        let mut e = canvas(6);
+        e.execute(Command::RectDraw { x0: 1, y0: 1, x1: 4, y1: 4, fill: false, color: INK })
+            .unwrap();
+        let doc = e.document().unwrap();
+        assert_eq!(doc.get_pixel(1, 1).unwrap(), INK, "corner");
+        assert_eq!(doc.get_pixel(4, 4).unwrap(), INK, "opposite corner");
+        assert_eq!(doc.get_pixel(2, 1).unwrap(), INK, "top edge");
+        assert_eq!(doc.get_pixel(2, 2).unwrap(), [0, 0, 0, 0], "interior stays empty");
+        assert_eq!(painted(&e).len(), 12, "4x4 outline = 12 pixels");
+    }
+
+    #[test]
+    fn filled_rectangle_differs_from_the_outline_by_exactly_its_interior() {
+        let mut outline = canvas(6);
+        outline
+            .execute(Command::RectDraw { x0: 1, y0: 1, x1: 4, y1: 4, fill: false, color: INK })
+            .unwrap();
+        let mut filled = canvas(6);
+        filled
+            .execute(Command::RectDraw { x0: 1, y0: 1, x1: 4, y1: 4, fill: true, color: INK })
+            .unwrap();
+
+        let extra: Vec<_> = painted(&filled)
+            .into_iter()
+            .filter(|p| !painted(&outline).contains(p))
+            .collect();
+        assert_eq!(extra, vec![(2, 2), (3, 2), (2, 3), (3, 3)], "only the 2x2 interior");
+    }
+
+    #[test]
+    fn rectangle_corners_may_be_given_in_any_order() {
+        let mut a = canvas(6);
+        a.execute(Command::RectDraw { x0: 1, y0: 1, x1: 4, y1: 4, fill: true, color: INK })
+            .unwrap();
+        let mut b = canvas(6);
+        b.execute(Command::RectDraw { x0: 4, y0: 4, x1: 1, y1: 1, fill: true, color: INK })
+            .unwrap();
+        assert_eq!(a.document_hash(), b.document_hash());
+    }
+
+    #[test]
+    fn flood_fill_stops_at_a_drawn_border() {
+        let mut e = canvas(7);
+        // A closed 5x5 box outline at (1,1)-(5,5); fill its interior.
+        e.execute(Command::RectDraw { x0: 1, y0: 1, x1: 5, y1: 5, fill: false, color: INK })
+            .unwrap();
+        let paint = [0xff, 0x00, 0x00, 0xff];
+        e.execute(Command::FillBucket { x: 3, y: 3, color: paint }).unwrap();
+
+        let doc = e.document().unwrap();
+        for y in 2..=4 {
+            for x in 2..=4 {
+                assert_eq!(doc.get_pixel(x, y).unwrap(), paint, "interior ({x},{y})");
+            }
+        }
+        assert_eq!(doc.get_pixel(0, 0).unwrap(), [0, 0, 0, 0], "outside the box is untouched");
+        assert_eq!(doc.get_pixel(6, 6).unwrap(), [0, 0, 0, 0]);
+        assert_eq!(doc.get_pixel(1, 1).unwrap(), INK, "the border itself survives");
+    }
+
+    #[test]
+    fn flood_fill_with_the_colour_already_present_terminates() {
+        // The degenerate case: if termination depended on "did the pixel
+        // change", this would loop forever.
+        let mut e = canvas(16);
+        e.execute(Command::FillBucket { x: 0, y: 0, color: [0, 0, 0, 0] }).unwrap();
+        assert_eq!(painted(&e).len(), 0);
+    }
+
+    #[test]
+    fn flood_fill_on_an_empty_canvas_fills_everything() {
+        let mut e = canvas(4);
+        e.execute(Command::FillBucket { x: 2, y: 2, color: INK }).unwrap();
+        assert_eq!(painted(&e).len(), 16);
+    }
+
+    #[test]
+    fn flood_fill_acts_on_the_active_layer_only() {
+        let mut e = canvas(4);
+        e.execute(Command::RectDraw { x0: 0, y0: 0, x1: 3, y1: 3, fill: true, color: INK })
+            .unwrap();
+        e.execute(Command::LayerAdd { name: "top".to_string() }).unwrap();
+        // The top layer is empty, so the fill covers all of it even though
+        // the composite underneath is solid.
+        e.execute(Command::FillBucket { x: 0, y: 0, color: [1, 2, 3, 255] }).unwrap();
+        let doc = e.document().unwrap();
+        assert_eq!(doc.get_pixel_on(0, 0, 0).unwrap(), INK, "bottom layer untouched");
+        assert_eq!(doc.get_pixel_on(1, 0, 0).unwrap(), [1, 2, 3, 255]);
+    }
+
+    #[test]
+    fn selection_clips_a_brush_stroke_and_a_flood_fill() {
+        // AC8: nothing may be written outside the marquee.
+        let mut e = canvas(8);
+        e.execute(Command::SelectRect { x: 2, y: 2, width: 3, height: 3 }).unwrap();
+
+        e.execute(Command::BrushStroke { x0: 0, y0: 3, x1: 7, y1: 3, size: 3, color: INK })
+            .unwrap();
+        e.execute(Command::FillBucket { x: 3, y: 3, color: [9, 9, 9, 255] }).unwrap();
+
+        for (x, y) in painted(&e) {
+            assert!(
+                (2..5).contains(&x) && (2..5).contains(&y),
+                "pixel ({x},{y}) escaped the 3x3 selection"
+            );
+        }
+        assert!(!painted(&e).is_empty(), "the selection should still have been painted");
+    }
+
+    #[test]
+    fn a_fill_cannot_leak_around_the_selection_boundary() {
+        let mut e = canvas(8);
+        e.execute(Command::SelectRect { x: 0, y: 0, width: 2, height: 8 }).unwrap();
+        e.execute(Command::FillBucket { x: 0, y: 0, color: INK }).unwrap();
+        assert_eq!(painted(&e).len(), 16, "exactly the 2x8 selection");
     }
 
     const SAMPLE_SCRIPT: &str = r##"

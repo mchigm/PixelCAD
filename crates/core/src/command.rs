@@ -42,6 +42,41 @@ pub enum Command {
     LayerVisible { index: usize, value: bool },
     /// `layer.opacity index=<usize> value=<u8>`.
     LayerOpacity { index: usize, value: u8 },
+
+    // ------------------------------------------- colour & selection (P1)
+    /// `color.set color=<hex>` — set the engine's active drawing colour.
+    /// Recorded so a GUI session replays with the same colour state; the
+    /// drawing commands themselves still carry an explicit colour, so a
+    /// script remains readable without tracking this.
+    ColorSet { color: Color },
+    /// `color.pick x=<i64> y=<i64>` — the eyedropper: read the *composited*
+    /// pixel at `(x, y)` into the active colour.
+    ColorPick { x: i64, y: i64 },
+    /// `select.rect x=<i64> y=<i64> width=<u32> height=<u32>` — constrain
+    /// every subsequent pixel write to this rectangle.
+    SelectRect { x: i64, y: i64, width: u32, height: u32 },
+    /// `select.clear` — drop the selection; writes are bounded only by the
+    /// canvas again.
+    SelectClear,
+
+    // ----------------------------------------------------- drawing (P1)
+    /// `brush.stroke x0=<i64> y0=<i64> x1=<i64> y1=<i64> size=<u32>
+    /// color=<hex>` — sweep a square brush of side `size` along the line
+    /// from `(x0, y0)` to `(x1, y1)`.
+    ///
+    /// **The eraser is this command with `color="#00000000"`.** Pixel writes
+    /// replace rather than blend, so painting fully transparent *is*
+    /// erasing; a separate `eraser.*` command would be the same code with a
+    /// different name.
+    BrushStroke { x0: i64, y0: i64, x1: i64, y1: i64, size: u32, color: Color },
+    /// `rect.draw x0=<i64> y0=<i64> x1=<i64> y1=<i64> fill=<bool>
+    /// color=<hex>` — an axis-aligned rectangle, outlined or filled.
+    /// Corners may be given in any order.
+    RectDraw { x0: i64, y0: i64, x1: i64, y1: i64, fill: bool, color: Color },
+    /// `fill.bucket x=<i64> y=<i64> color=<hex>` — 4-connected flood fill on
+    /// the active layer, replacing the contiguous region that exactly
+    /// matches the starting pixel's RGBA.
+    FillBucket { x: i64, y: i64, color: Color },
 }
 
 impl Command {
@@ -60,6 +95,13 @@ impl Command {
             Command::LayerMove { .. } => "layer.move",
             Command::LayerVisible { .. } => "layer.visible",
             Command::LayerOpacity { .. } => "layer.opacity",
+            Command::ColorSet { .. } => "color.set",
+            Command::ColorPick { .. } => "color.pick",
+            Command::SelectRect { .. } => "select.rect",
+            Command::SelectClear => "select.clear",
+            Command::BrushStroke { .. } => "brush.stroke",
+            Command::RectDraw { .. } => "rect.draw",
+            Command::FillBucket { .. } => "fill.bucket",
         }
     }
 }

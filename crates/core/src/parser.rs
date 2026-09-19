@@ -197,6 +197,41 @@ pub fn parse_line(line: &str, line_number: usize) -> Result<Command, ParseError>
             index: parse_usize(require(&fields, "index", line_number)?, "index", line_number)?,
             value: parse_u8(require(&fields, "value", line_number)?, "value", line_number)?,
         }),
+        "color.set" => Ok(Command::ColorSet {
+            color: parse_color(require(&fields, "color", line_number)?, "color", line_number)?,
+        }),
+        "color.pick" => Ok(Command::ColorPick {
+            x: parse_i64(require(&fields, "x", line_number)?, "x", line_number)?,
+            y: parse_i64(require(&fields, "y", line_number)?, "y", line_number)?,
+        }),
+        "select.rect" => Ok(Command::SelectRect {
+            x: parse_i64(require(&fields, "x", line_number)?, "x", line_number)?,
+            y: parse_i64(require(&fields, "y", line_number)?, "y", line_number)?,
+            width: parse_u32(require(&fields, "width", line_number)?, "width", line_number)?,
+            height: parse_u32(require(&fields, "height", line_number)?, "height", line_number)?,
+        }),
+        "select.clear" => Ok(Command::SelectClear),
+        "brush.stroke" => Ok(Command::BrushStroke {
+            x0: parse_i64(require(&fields, "x0", line_number)?, "x0", line_number)?,
+            y0: parse_i64(require(&fields, "y0", line_number)?, "y0", line_number)?,
+            x1: parse_i64(require(&fields, "x1", line_number)?, "x1", line_number)?,
+            y1: parse_i64(require(&fields, "y1", line_number)?, "y1", line_number)?,
+            size: parse_u32(require(&fields, "size", line_number)?, "size", line_number)?,
+            color: parse_color(require(&fields, "color", line_number)?, "color", line_number)?,
+        }),
+        "rect.draw" => Ok(Command::RectDraw {
+            x0: parse_i64(require(&fields, "x0", line_number)?, "x0", line_number)?,
+            y0: parse_i64(require(&fields, "y0", line_number)?, "y0", line_number)?,
+            x1: parse_i64(require(&fields, "x1", line_number)?, "x1", line_number)?,
+            y1: parse_i64(require(&fields, "y1", line_number)?, "y1", line_number)?,
+            fill: parse_bool(require(&fields, "fill", line_number)?, "fill", line_number)?,
+            color: parse_color(require(&fields, "color", line_number)?, "color", line_number)?,
+        }),
+        "fill.bucket" => Ok(Command::FillBucket {
+            x: parse_i64(require(&fields, "x", line_number)?, "x", line_number)?,
+            y: parse_i64(require(&fields, "y", line_number)?, "y", line_number)?,
+            color: parse_color(require(&fields, "color", line_number)?, "color", line_number)?,
+        }),
         other => Err(ParseError {
             line_number,
             message: format!("unknown command {:?}", other),
@@ -254,6 +289,35 @@ pub fn serialize_command(command: &Command) -> String {
         Command::LayerOpacity { index, value } => {
             format!("layer.opacity index={} value={}", index, value)
         }
+        Command::ColorSet { color } => {
+            format!("color.set color=\"{}\"", format_hex_color(*color))
+        }
+        Command::ColorPick { x, y } => format!("color.pick x={} y={}", x, y),
+        Command::SelectRect { x, y, width, height } => {
+            format!("select.rect x={} y={} width={} height={}", x, y, width, height)
+        }
+        Command::SelectClear => "select.clear".to_string(),
+        Command::BrushStroke { x0, y0, x1, y1, size, color } => format!(
+            "brush.stroke x0={} y0={} x1={} y1={} size={} color=\"{}\"",
+            x0,
+            y0,
+            x1,
+            y1,
+            size,
+            format_hex_color(*color)
+        ),
+        Command::RectDraw { x0, y0, x1, y1, fill, color } => format!(
+            "rect.draw x0={} y0={} x1={} y1={} fill={} color=\"{}\"",
+            x0,
+            y0,
+            x1,
+            y1,
+            fill,
+            format_hex_color(*color)
+        ),
+        Command::FillBucket { x, y, color } => {
+            format!("fill.bucket x={} y={} color=\"{}\"", x, y, format_hex_color(*color))
+        }
     }
 }
 
@@ -291,7 +355,76 @@ mod tests {
             Command::LayerMove { from: 2, to: 0 },
             Command::LayerVisible { index: 1, value: false },
             Command::LayerOpacity { index: 1, value: 128 },
+            Command::ColorSet { color: [0x22, 0x44, 0x66, 0xff] },
+            Command::ColorPick { x: 9, y: 11 },
+            Command::SelectRect { x: 2, y: 3, width: 10, height: 12 },
+            Command::SelectClear,
+            Command::BrushStroke { x0: 1, y0: 2, x1: 3, y1: 4, size: 5, color: [1, 2, 3, 4] },
+            Command::RectDraw { x0: 1, y0: 2, x1: 30, y1: 4, fill: true, color: [9, 8, 7, 255] },
+            Command::RectDraw { x0: 0, y0: 0, x1: 1, y1: 1, fill: false, color: [0, 0, 0, 255] },
+            Command::FillBucket { x: 6, y: 7, color: [0x20, 0x30, 0x40, 0xff] },
         ]
+    }
+
+    /// Assigns every `Command` variant a dense index.
+    ///
+    /// This match has **no wildcard arm on purpose**: adding a new variant
+    /// to `Command` makes this function fail to compile, which forces the
+    /// author to extend `VARIANT_COUNT` and `all_commands()` too. That is
+    /// what makes the round-trip test below fail-closed rather than
+    /// silently skipping the new variant.
+    fn variant_index(c: &Command) -> usize {
+        match c {
+            Command::CanvasNew { .. } => 0,
+            Command::PixelSet { .. } => 1,
+            Command::LineDraw { .. } => 2,
+            Command::PaletteSet { .. } => 3,
+            Command::LayerAdd { .. } => 4,
+            Command::LayerSelect { .. } => 5,
+            Command::LayerRemove { .. } => 6,
+            Command::LayerRename { .. } => 7,
+            Command::LayerMove { .. } => 8,
+            Command::LayerVisible { .. } => 9,
+            Command::LayerOpacity { .. } => 10,
+            Command::ColorSet { .. } => 11,
+            Command::ColorPick { .. } => 12,
+            Command::SelectRect { .. } => 13,
+            Command::SelectClear => 14,
+            Command::BrushStroke { .. } => 15,
+            Command::RectDraw { .. } => 16,
+            Command::FillBucket { .. } => 17,
+        }
+    }
+
+    const VARIANT_COUNT: usize = 18;
+
+    #[test]
+    fn every_command_variant_is_covered_by_the_round_trip_test() {
+        let mut covered = [false; VARIANT_COUNT];
+        for command in all_commands() {
+            covered[variant_index(&command)] = true;
+        }
+        let missing: Vec<usize> =
+            covered.iter().enumerate().filter(|(_, c)| !**c).map(|(i, _)| i).collect();
+        assert!(
+            missing.is_empty(),
+            "command variant(s) at index {missing:?} are never round-tripped; \
+             add a sample to all_commands()"
+        );
+    }
+
+    #[test]
+    fn every_command_has_a_distinct_name() {
+        // `all_commands()` deliberately carries two `RectDraw` samples
+        // (filled and outlined), so compare distinct names, not sample count.
+        let mut names: Vec<&str> = all_commands().iter().map(|c| c.name()).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(
+            names.len(),
+            VARIANT_COUNT,
+            "every variant must have its own .pxc name and a sample in all_commands(); got {names:?}"
+        );
     }
 
     #[test]
