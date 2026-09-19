@@ -27,6 +27,8 @@ Each development session follows this cycle:
    - Move `PLAN.md` → `Plans/archive/PLAN-phase<N>.md`
    - Update this file: phase status → `COMPLETE`, record completion date
    - Carry unresolved `BACKLOG.md` items forward
+   - This step (plus starting step 1 for the next phase) is automated by the
+     project-local `next-phase` skill at `.agents/skills/next-phase/SKILL.md`.
 
 Resuming a half-finished phase: skip step 1; Autopilot resumes from `PROGRESS.md`.
 
