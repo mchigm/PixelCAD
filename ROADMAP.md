@@ -43,7 +43,7 @@ to PNG.
 **Exit criterion:** the same command script produces byte-identical PNG output
 via CLI and test harness; GUI drawing is recorded as a replayable script.
 
-### Phase 1 — Drawing MVP                       [PENDING]
+### Phase 1 — Drawing MVP                       [ACTIVE]
 Brush, eraser, fill, eyedropper, rectangle/line tools, selections, multiple
 layers, undo/redo polish, palette management, keyboard shortcuts, versioned
 project file (.pxc archive), PNG import.
@@ -110,7 +110,7 @@ Phase 5b.
 | Phase | Status | Locked | Completed |
 |-------|--------|--------|-----------|
 | 0 | COMPLETE | 2026-09-19 | 2026-09-19 |
-| 1 | PENDING | — | — |
+| 1 | ACTIVE | 2026-09-19 | — |
 | 2 | PENDING | — | — |
 | 3 | PENDING | — | — |
 | 4 | PENDING | — | — |

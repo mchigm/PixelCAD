@@ -1,10 +1,13 @@
 *.log
 
-/Profiles
-/Skills
+# Profiles/ and Skills/ are intentionally VERSIONED (decision I2, Phase 1):
+# ROADMAP.md's Session Protocol tells every future session to read
+# Profiles/Planner/profile.md and Profiles/Autopilot/profile.md by path, so a
+# clean clone must contain them. /Agents is scratch space and stays ignored.
 /Agents
 
 /cache
 
 /target
 out.png
+*.pxcproj.tmp
