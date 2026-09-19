@@ -21,7 +21,7 @@
   criteria PASS**, with no PARTIAL and no FAIL. The one criterion that was
   PARTIAL at the end of Phase 0 (the `Profiles/`/`Skills/` versioning
   question, "I2") is resolved and now passes as AC18.
-- **Final commit SHA:** `2b57e2e` — the Task 11 close-out commit. As in the
+- **Final commit SHA:** `fc57ffb` (`fc57ffbc5d048d2dae235c3207e389e587ce5698`) — the Task 11 close-out commit. As in the
   previous session, a commit cannot contain its own hash by construction;
   this value was captured with `git rev-parse HEAD` immediately after
   committing and the file then amended in place solely to insert it. Run
