@@ -54,7 +54,7 @@
 - Deviations from PLAN.md: chose the low-level `png` crate over `image` for the PNG encode step — gives explicit control over color type/bit depth/metadata, which is the safer choice for a determinism guarantee than a higher-level crate's defaults.
 - Mode D regression check: `cargo tree -p pixelcad-core` re-verified — still only `thiserror` (+ build-time proc-macro deps); adding `png` to `crates/cli` does not touch `core`'s dependency graph.
 - Files modified: `crates/cli/Cargo.toml` (added `png`), `crates/cli/src/main.rs`, `crates/cli/tests/determinism.rs` (new), `crates/core/tests/ship_determinism.rs` (new), `docs/samples/ship.pxc` (new).
-- Committed: (recorded in next commit).
+- Committed: `5e9db2e` "Task 4: headless CLI (pixelcad-cli)".
 
 ## Current Blockers
 [Empty — I2 is a non-blocking open question, see Log; Tasks 2-7 proceed regardless.]
