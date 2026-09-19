@@ -96,7 +96,7 @@
 - Deviations from PLAN.md: (1) added `Engine::can_undo`/`can_redo` to `core` — small additive API, not a design change; (2) chose right-click-drag as an additional pan trigger alongside Space+left-click-drag, since PLAn.md's "pan (drag/space)" wording was satisfied by either but right-click is the more discoverable default; (3) zoom is restricted to integer steps 1..=32 (not continuous) — simplifies nearest-neighbour rendering and grid-line placement, and matches common pixel-art tool UX; PLAN.md did not specify continuous zoom.
 - Mode D regression check: see above — `cargo build --workspace` and `cargo test --workspace` both clean after the `core` change.
 - Files modified: `crates/app/Cargo.toml` (slint, slint-build, i-slint-backend-testing dev-dep), `crates/app/build.rs`, `crates/app/ui/main.slint` (new), `crates/app/src/{main.rs,controller.rs,render.rs}`, `crates/core/src/engine.rs` (can_undo/can_redo), `Cargo.lock`.
-- Committed: (recorded immediately below after this entry is written).
+- Committed: `be3b482` "Task 5: Slint shell (pixelcad-app)".
 
 ## Current Blockers
 [Empty — the macOS screen-recording permission gap only affected an optional extra screenshot, not any acceptance criterion, and has since been resolved by the user. I2 (Profiles/Skills versioning) remains a non-blocking open question, see the Session-start log entry.]
