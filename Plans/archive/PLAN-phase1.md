@@ -1,8 +1,12 @@
 # PLAN — Phase 1: Drawing MVP
 
 **Created:** 2026-09-19T23:30:00+08:00
-**Status:** LOCKED
+**Status:** COMPLETE
 **Locked:** 2026-09-19T23:45:00+08:00
+**Completed:** 2026-09-20T03:00:00+08:00
+
+> All 19 acceptance criteria PASS. Full evidence (exact command + observed
+> output per criterion) is in `PHASE2_RESULT.md` Section 2.
 **Product:** PixelCAD (`pixelcad`)
 **ROADMAP phase:** Phase 1 — "Drawing MVP" (the second executed session)
 
@@ -113,62 +117,62 @@ engine state and tools (Task 4–6) → project file (Task 7) → PNG import
 
 ## Acceptance Criteria
 
-- [ ] **AC1** — `cargo build --workspace` succeeds from this repository path
+- [x] **AC1** — `cargo build --workspace` succeeds from this repository path
       (space + apostrophe) with zero errors
-- [ ] **AC2** — `cargo test --workspace` passes with zero failures and at
+- [x] **AC2** — `cargo test --workspace` passes with zero failures and at
       least 90 tests total (Phase 0 baseline was 51)
-- [ ] **AC3** — `cargo tree -p pixelcad-core` lists no `slint`, UI, GPU, AI
+- [x] **AC3** — `cargo tree -p pixelcad-core` lists no `slint`, UI, GPU, AI
       or CAD crate (only `thiserror` and its proc-macro chain)
-- [ ] **AC4 (Phase 0 regression guard)** — `cargo run -p pixelcad-cli -- run
+- [x] **AC4 (Phase 0 regression guard)** — `cargo run -p pixelcad-cli -- run
       docs/samples/ship.pxc --out out.png` still produces sha256
       `bde008684f8384379e33f514d15d4ca4c1aed97798d52a08bbb1cccd6f781232`,
       byte-identical to Phase 0, proving the layer reshape did not change
       single-layer output
-- [ ] **AC5** — a script that creates a second layer and paints over the
+- [x] **AC5** — a script that creates a second layer and paints over the
       first composites top-over-bottom correctly, and toggling the top
       layer's visibility or opacity changes the composited output — asserted
       by unit test on exact pixel values
-- [ ] **AC6** — every `Command` variant round-trips
+- [x] **AC6** — every `Command` variant round-trips
       `Command -> serialize_command -> parse_line -> Command` unchanged,
       asserted by a test that enumerates **all** variants (so a future
       variant added without parser support fails the test)
-- [ ] **AC7** — brush (size ≥ 1), eraser, flood fill, eyedropper, line,
+- [x] **AC7** — brush (size ≥ 1), eraser, flood fill, eyedropper, line,
       rectangle (outlined and filled), and rectangular selection each have a
       core-level unit test asserting exact resulting pixels, and each is
       reachable only via a `Command`
-- [ ] **AC8** — a rectangular selection clips every drawing command: a fill
+- [x] **AC8** — a rectangular selection clips every drawing command: a fill
       or brush stroke that would cross the selection boundary writes no pixel
       outside it (unit test on exact pixels)
-- [ ] **AC9** — a project saved with `save_project` and reloaded with
+- [x] **AC9** — a project saved with `save_project` and reloaded with
       `open_project` yields an identical `Document::content_hash()` and an
       identical command history
-- [ ] **AC10** — a `.pxcproj` whose header declares a version newer than the
+- [x] **AC10** — a `.pxcproj` whose header declares a version newer than the
       supported one is rejected with a typed error naming both versions, and
       the in-memory document is left untouched (no partial load)
-- [ ] **AC11** — `pixelcad-cli import <in.png> --out <p.pxcproj>` followed by
+- [x] **AC11** — `pixelcad-cli import <in.png> --out <p.pxcproj>` followed by
       `pixelcad-cli run <p.pxcproj> --out <out.png>` produces a PNG whose
       decoded RGBA pixels are identical to the source PNG's
-- [ ] **AC12** — running the same `.pxcproj` twice through the CLI produces
+- [x] **AC12** — running the same `.pxcproj` twice through the CLI produces
       byte-identical PNGs (determinism preserved for the new format)
-- [ ] **AC13** — a headless GUI test proves one pointer drag (down, several
+- [x] **AC13** — a headless GUI test proves one pointer drag (down, several
       moves, up) is undone by a **single** Undo click, restoring the document
       exactly
-- [ ] **AC14** — headless GUI tests dispatch real key events and prove at
+- [x] **AC14** — headless GUI tests dispatch real key events and prove at
       least: `b`/`e`/`g`/`i`/`l`/`r`/`m` select the brush/eraser/fill/
       eyedropper/line/rect/select tools, and Ctrl-or-Cmd+`z` undoes
-- [ ] **AC15** — a headless GUI test proves editing a palette swatch's colour
+- [x] **AC15** — a headless GUI test proves editing a palette swatch's colour
       emits a `palette.set` command that appears in the saved script
-- [ ] **AC16** — a headless GUI test proves adding a layer, selecting it,
+- [x] **AC16** — a headless GUI test proves adding a layer, selecting it,
       drawing on it, and toggling its visibility all work through the real
       wired callbacks
-- [ ] **AC17** — `docs/samples/blueprint.pxcproj` exists, is a valid
+- [x] **AC17** — `docs/samples/blueprint.pxcproj` exists, is a valid
       version-1 project with at least 3 layers, renders through the CLI, and
       renders byte-identically on two consecutive runs
-- [ ] **AC18** — `git ls-files` lists `Profiles/Planner/profile.md`,
+- [x] **AC18** — `git ls-files` lists `Profiles/Planner/profile.md`,
       `Profiles/Autopilot/profile.md`, `Profiles/INDEX.md` and
       `Skills/INDEX.md` (I2 resolved), while `/target`, `*.log`, `/cache` and
       `/Agents` remain ignored
-- [ ] **AC19** — `README.md` documents the full `.pxc` command grammar as
+- [x] **AC19** — `README.md` documents the full `.pxc` command grammar as
       implemented at the end of this phase, and `BACKLOG.md` exists and
       contains every out-of-scope discovery made during execution
 
