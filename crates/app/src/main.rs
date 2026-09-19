@@ -338,6 +338,53 @@ mod gui_tests {
         assert_eq!(controller.borrow().document(), &after_draw);
     }
 
+    /// The compiled `pixelcad-cli` binary, located relative to this test
+    /// binary's own path (`target/<profile>/deps/pixelcad_app-<hash>` ->
+    /// `target/<profile>/pixelcad-cli`). Precondition: something must have
+    /// built the `pixelcad-cli` bin target in this profile already --
+    /// true whenever this is run as part of `cargo test --workspace`
+    /// (which builds every bin target in the workspace), which is how this
+    /// suite is meant to be run.
+    fn cli_binary_path() -> std::path::PathBuf {
+        let mut path = std::env::current_exe().unwrap();
+        path.pop(); // deps
+        path.pop(); // <profile>
+        path.push("pixelcad-cli");
+        path
+    }
+
+    #[test]
+    fn save_button_output_replays_through_the_real_cli_binary() {
+        let (app, controller) = new_app_with_controller();
+        {
+            let mut c = controller.borrow_mut();
+            c.select_palette(6);
+            c.begin_stroke(4.0, 4.0).unwrap();
+            c.continue_drag(60.0, 4.0).unwrap();
+            c.end_drag();
+        }
+        refresh(&app, &controller.borrow());
+
+        let dir = std::env::temp_dir().join(format!("pixelcad-app-cli-interop-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script_path = dir.join("gui_drawn.pxc");
+        app.invoke_save_clicked(script_path.to_str().unwrap().into());
+
+        let cli = cli_binary_path();
+        assert!(cli.exists(), "pixelcad-cli binary not found at {}; run `cargo build --workspace` first", cli.display());
+
+        let out_path = dir.join("gui_drawn.png");
+        let status = std::process::Command::new(&cli)
+            .args(["run", script_path.to_str().unwrap(), "--out", out_path.to_str().unwrap()])
+            .status()
+            .expect("failed to launch pixelcad-cli");
+        assert!(status.success(), "pixelcad-cli exited with failure");
+        assert!(out_path.exists(), "pixelcad-cli did not produce a PNG");
+        assert!(std::fs::metadata(&out_path).unwrap().len() > 0, "PNG must be non-empty");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn save_button_writes_a_pxc_file_the_cli_can_replay() {
         let (app, controller) = new_app_with_controller();
