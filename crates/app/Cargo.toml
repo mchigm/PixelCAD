@@ -1,0 +1,13 @@
+[package]
+name = "pixelcad-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Slint desktop shell for PixelCAD."
+
+[[bin]]
+name = "pixelcad-app"
+path = "src/main.rs"
+
+[dependencies]
+pixelcad-core = { path = "../core" }

@@ -1,0 +1,13 @@
+[package]
+name = "pixelcad-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Headless CLI that replays PixelCAD .pxc command scripts and exports PNG."
+
+[[bin]]
+name = "pixelcad-cli"
+path = "src/main.rs"
+
+[dependencies]
+pixelcad-core = { path = "../core" }

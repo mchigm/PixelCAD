@@ -1,0 +1,10 @@
+[package]
+name = "pixelcad-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Headless document model and typed command engine for PixelCAD."
+
+[dependencies]
+
+[dev-dependencies]
