@@ -28,7 +28,8 @@ pub fn render_display_buffer(document: &Document, zoom: u32, draw_grid: bool) ->
     let src_h = document.height();
     let dst_w = src_w * zoom;
     let dst_h = src_h * zoom;
-    let src = document.pixels();
+    // The viewport shows the flattened stack, exactly what the CLI exports.
+    let src = document.composite();
 
     let mut out = vec![0u8; dst_w as usize * dst_h as usize * 4];
     let grid_active = draw_grid && zoom >= GRID_ZOOM_THRESHOLD;
@@ -93,7 +94,22 @@ mod tests {
         let doc = small_doc();
         let (w, h, buf) = render_display_buffer(&doc, 1, true);
         assert_eq!((w, h), (2, 2));
-        assert_eq!(buf, doc.pixels());
+        assert_eq!(buf, doc.composite());
+    }
+
+    #[test]
+    fn renderer_shows_the_composited_stack_not_the_active_layer() {
+        let mut engine = Engine::new();
+        engine.execute(pixelcad_core::Command::CanvasNew { width: 1, height: 1 }).unwrap();
+        engine
+            .execute(pixelcad_core::Command::PixelSet { x: 0, y: 0, color: [255, 0, 0, 255] })
+            .unwrap();
+        // Add an empty layer on top and make it active: the renderer must
+        // still show the red pixel underneath.
+        engine.execute(pixelcad_core::Command::LayerAdd { name: "top".into() }).unwrap();
+        let doc = engine.document().unwrap();
+        let (_, _, buf) = render_display_buffer(doc, 1, false);
+        assert_eq!(&buf[0..4], &[255, 0, 0, 255]);
     }
 
     #[test]

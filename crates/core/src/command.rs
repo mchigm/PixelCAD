@@ -25,6 +25,23 @@ pub enum Command {
     /// still a document-level fact worth recording and replaying (e.g. so a
     /// `.pxc` script fully reproduces the GUI's palette state).
     PaletteSet { index: u8, color: Color },
+
+    // ---------------------------------------------------------- layers (P1)
+    /// `layer.add name="<text>"` — insert a new transparent layer above the
+    /// active one and make it active.
+    LayerAdd { name: String },
+    /// `layer.select index=<usize>` — change the active layer.
+    LayerSelect { index: usize },
+    /// `layer.remove index=<usize>` — delete a layer (never the last one).
+    LayerRemove { index: usize },
+    /// `layer.rename index=<usize> name="<text>"`.
+    LayerRename { index: usize, name: String },
+    /// `layer.move from=<usize> to=<usize>` — reorder the stack.
+    LayerMove { from: usize, to: usize },
+    /// `layer.visible index=<usize> value=<bool>`.
+    LayerVisible { index: usize, value: bool },
+    /// `layer.opacity index=<usize> value=<u8>`.
+    LayerOpacity { index: usize, value: u8 },
 }
 
 impl Command {
@@ -36,6 +53,13 @@ impl Command {
             Command::PixelSet { .. } => "pixel.set",
             Command::LineDraw { .. } => "line.draw",
             Command::PaletteSet { .. } => "palette.set",
+            Command::LayerAdd { .. } => "layer.add",
+            Command::LayerSelect { .. } => "layer.select",
+            Command::LayerRemove { .. } => "layer.remove",
+            Command::LayerRename { .. } => "layer.rename",
+            Command::LayerMove { .. } => "layer.move",
+            Command::LayerVisible { .. } => "layer.visible",
+            Command::LayerOpacity { .. } => "layer.opacity",
         }
     }
 }
@@ -69,6 +93,22 @@ pub fn format_hex_color(c: Color) -> String {
     format!("#{:02x}{:02x}{:02x}{:02x}", c[0], c[1], c[2], c[3])
 }
 
+/// Makes an arbitrary string safe to write as a quoted `.pxc` value.
+///
+/// The `.pxc` grammar has no escape sequences by design (it is meant to stay
+/// trivially hand-editable), so a layer name containing a double quote or a
+/// newline could not survive a round trip. Rather than inventing escaping,
+/// such characters are replaced with a space at the point a name enters the
+/// engine *and* at the point it is serialized — so both paths agree and the
+/// document never holds a name it could not write back out.
+pub fn sanitize_name(name: &str) -> String {
+    name.chars()
+        .map(|c| if c == '"' || c.is_control() { ' ' } else { c })
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,6 +126,14 @@ mod tests {
     #[test]
     fn rejects_bad_length() {
         assert!(parse_hex_color("#abc").is_err());
+    }
+
+    #[test]
+    fn sanitize_name_strips_unrepresentable_characters() {
+        assert_eq!(sanitize_name("hull \"outer\""), "hull  outer");
+        assert_eq!(sanitize_name("a\nb"), "a b");
+        assert_eq!(sanitize_name("  padded  "), "padded");
+        assert_eq!(sanitize_name("Rigging 2"), "Rigging 2", "ordinary names are untouched");
     }
 
     #[test]

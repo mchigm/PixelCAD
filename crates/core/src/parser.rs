@@ -22,7 +22,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::command::{format_hex_color, parse_hex_color, Command};
+use crate::command::{format_hex_color, parse_hex_color, sanitize_name, Command};
 
 /// An error produced while parsing a `.pxc` script.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,6 +112,24 @@ fn parse_i64(value: &str, key: &str, line_number: usize) -> Result<i64, ParseErr
     })
 }
 
+fn parse_usize(value: &str, key: &str, line_number: usize) -> Result<usize, ParseError> {
+    value.parse::<usize>().map_err(|e| ParseError {
+        line_number,
+        message: format!("field {:?} = {:?} is not a valid index: {}", key, value, e),
+    })
+}
+
+fn parse_bool(value: &str, key: &str, line_number: usize) -> Result<bool, ParseError> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        other => Err(ParseError {
+            line_number,
+            message: format!("field {:?} = {:?} must be true or false", key, other),
+        }),
+    }
+}
+
 fn parse_color(value: &str, key: &str, line_number: usize) -> Result<[u8; 4], ParseError> {
     parse_hex_color(value).map_err(|e| ParseError {
         line_number,
@@ -153,6 +171,31 @@ pub fn parse_line(line: &str, line_number: usize) -> Result<Command, ParseError>
         "palette.set" => Ok(Command::PaletteSet {
             index: parse_u8(require(&fields, "index", line_number)?, "index", line_number)?,
             color: parse_color(require(&fields, "color", line_number)?, "color", line_number)?,
+        }),
+        "layer.add" => Ok(Command::LayerAdd {
+            name: sanitize_name(require(&fields, "name", line_number)?),
+        }),
+        "layer.select" => Ok(Command::LayerSelect {
+            index: parse_usize(require(&fields, "index", line_number)?, "index", line_number)?,
+        }),
+        "layer.remove" => Ok(Command::LayerRemove {
+            index: parse_usize(require(&fields, "index", line_number)?, "index", line_number)?,
+        }),
+        "layer.rename" => Ok(Command::LayerRename {
+            index: parse_usize(require(&fields, "index", line_number)?, "index", line_number)?,
+            name: sanitize_name(require(&fields, "name", line_number)?),
+        }),
+        "layer.move" => Ok(Command::LayerMove {
+            from: parse_usize(require(&fields, "from", line_number)?, "from", line_number)?,
+            to: parse_usize(require(&fields, "to", line_number)?, "to", line_number)?,
+        }),
+        "layer.visible" => Ok(Command::LayerVisible {
+            index: parse_usize(require(&fields, "index", line_number)?, "index", line_number)?,
+            value: parse_bool(require(&fields, "value", line_number)?, "value", line_number)?,
+        }),
+        "layer.opacity" => Ok(Command::LayerOpacity {
+            index: parse_usize(require(&fields, "index", line_number)?, "index", line_number)?,
+            value: parse_u8(require(&fields, "value", line_number)?, "value", line_number)?,
         }),
         other => Err(ParseError {
             line_number,
@@ -198,6 +241,19 @@ pub fn serialize_command(command: &Command) -> String {
         Command::PaletteSet { index, color } => {
             format!("palette.set index={} color=\"{}\"", index, format_hex_color(*color))
         }
+        Command::LayerAdd { name } => format!("layer.add name=\"{}\"", sanitize_name(name)),
+        Command::LayerSelect { index } => format!("layer.select index={}", index),
+        Command::LayerRemove { index } => format!("layer.remove index={}", index),
+        Command::LayerRename { index, name } => {
+            format!("layer.rename index={} name=\"{}\"", index, sanitize_name(name))
+        }
+        Command::LayerMove { from, to } => format!("layer.move from={} to={}", from, to),
+        Command::LayerVisible { index, value } => {
+            format!("layer.visible index={} value={}", index, value)
+        }
+        Command::LayerOpacity { index, value } => {
+            format!("layer.opacity index={} value={}", index, value)
+        }
     }
 }
 
@@ -228,6 +284,13 @@ mod tests {
                 color: [0xff, 0xff, 0xff, 0x80],
             },
             Command::PaletteSet { index: 2, color: [0x00, 0x00, 0x00, 0xff] },
+            Command::LayerAdd { name: "Rigging".to_string() },
+            Command::LayerSelect { index: 1 },
+            Command::LayerRemove { index: 2 },
+            Command::LayerRename { index: 0, name: "Hull outline".to_string() },
+            Command::LayerMove { from: 2, to: 0 },
+            Command::LayerVisible { index: 1, value: false },
+            Command::LayerOpacity { index: 1, value: 128 },
         ]
     }
 
@@ -265,6 +328,33 @@ mod tests {
     fn reports_line_number_on_error() {
         let err = parse_script("canvas.new width=1 height=1\npixel.set x=1\n").unwrap_err();
         assert_eq!(err.line_number, 2);
+    }
+
+    #[test]
+    fn layer_name_with_spaces_survives_a_round_trip() {
+        let command = Command::LayerAdd { name: "Deck plan A".to_string() };
+        let text = serialize_command(&command);
+        assert_eq!(text, r#"layer.add name="Deck plan A""#);
+        assert_eq!(parse_line(&text, 1).unwrap(), command);
+    }
+
+    #[test]
+    fn layer_name_is_sanitized_identically_by_both_directions() {
+        // A name the grammar cannot represent is normalised the same way
+        // whether it arrives from text or from a constructed Command, so a
+        // save/load cycle is still a fixed point.
+        let dirty = Command::LayerAdd { name: "a\"b".to_string() };
+        let text = serialize_command(&dirty);
+        let parsed = parse_line(&text, 1).unwrap();
+        assert_eq!(parsed, Command::LayerAdd { name: "a b".to_string() });
+        assert_eq!(serialize_command(&parsed), text, "sanitisation is idempotent");
+    }
+
+    #[test]
+    fn rejects_bad_boolean() {
+        let err = parse_line("layer.visible index=0 value=yes", 3).unwrap_err();
+        assert_eq!(err.line_number, 3);
+        assert!(err.message.contains("must be true or false"), "got: {}", err.message);
     }
 
     #[test]

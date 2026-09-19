@@ -7,7 +7,7 @@
 //! resulting document is byte-identical, which is what makes CLI replay and
 //! GUI-recorded scripts interchangeable.
 
-use crate::command::Command;
+use crate::command::{sanitize_name, Command};
 use crate::document::{Color, Document, DocumentError};
 use crate::parser::serialize_script;
 
@@ -204,6 +204,41 @@ fn apply(state: &mut EngineState, command: &Command) -> Result<(), EngineError> 
             state.palette[i] = color;
             Ok(())
         }
+        Command::LayerAdd { ref name } => {
+            let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
+            doc.add_layer(sanitize_name(name));
+            Ok(())
+        }
+        Command::LayerSelect { index } => {
+            let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
+            doc.select_layer(index)?;
+            Ok(())
+        }
+        Command::LayerRemove { index } => {
+            let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
+            doc.remove_layer(index)?;
+            Ok(())
+        }
+        Command::LayerRename { index, ref name } => {
+            let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
+            doc.rename_layer(index, sanitize_name(name))?;
+            Ok(())
+        }
+        Command::LayerMove { from, to } => {
+            let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
+            doc.move_layer(from, to)?;
+            Ok(())
+        }
+        Command::LayerVisible { index, value } => {
+            let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
+            doc.set_layer_visible(index, value)?;
+            Ok(())
+        }
+        Command::LayerOpacity { index, value } => {
+            let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
+            doc.set_layer_opacity(index, value)?;
+            Ok(())
+        }
     }
 }
 
@@ -312,6 +347,68 @@ mod tests {
             .execute(Command::PaletteSet { index: 200, color: [0, 0, 0, 0] })
             .unwrap_err();
         assert_eq!(err, EngineError::PaletteIndexOutOfRange { index: 200 });
+    }
+
+    #[test]
+    fn layer_commands_build_and_reorder_a_stack() {
+        let mut engine = Engine::new();
+        engine.execute(Command::CanvasNew { width: 2, height: 1 }).unwrap();
+        engine.execute(Command::LayerAdd { name: "rigging".to_string() }).unwrap();
+        assert_eq!(engine.document().unwrap().layer_count(), 2);
+        assert_eq!(engine.document().unwrap().active_layer_index(), 1);
+
+        engine.execute(Command::LayerRename { index: 0, name: "hull".to_string() }).unwrap();
+        assert_eq!(engine.document().unwrap().layers()[0].name(), "hull");
+
+        engine.execute(Command::LayerMove { from: 1, to: 0 }).unwrap();
+        assert_eq!(engine.document().unwrap().layers()[0].name(), "rigging");
+
+        engine.execute(Command::LayerVisible { index: 0, value: false }).unwrap();
+        assert!(!engine.document().unwrap().layers()[0].visible());
+
+        engine.execute(Command::LayerOpacity { index: 0, value: 64 }).unwrap();
+        assert_eq!(engine.document().unwrap().layers()[0].opacity(), 64);
+
+        engine.execute(Command::LayerSelect { index: 1 }).unwrap();
+        engine.execute(Command::LayerRemove { index: 0 }).unwrap();
+        assert_eq!(engine.document().unwrap().layer_count(), 1);
+    }
+
+    #[test]
+    fn layer_commands_require_a_canvas() {
+        let mut engine = Engine::new();
+        let err = engine.execute(Command::LayerAdd { name: "x".to_string() }).unwrap_err();
+        assert_eq!(err, EngineError::NoCanvas);
+    }
+
+    #[test]
+    fn removing_the_last_layer_is_refused_and_leaves_the_document_intact() {
+        let mut engine = Engine::new();
+        engine.execute(Command::CanvasNew { width: 2, height: 2 }).unwrap();
+        let before = engine.document().unwrap().clone();
+        let err = engine.execute(Command::LayerRemove { index: 0 }).unwrap_err();
+        assert_eq!(err, EngineError::Document(DocumentError::LastLayer));
+        assert_eq!(
+            engine.document().unwrap(),
+            &before,
+            "a rejected command must not mutate the live document"
+        );
+        assert_eq!(engine.history().len(), 1, "a failed command must not enter history");
+    }
+
+    #[test]
+    fn undo_restores_a_removed_layer_with_its_pixels() {
+        let mut engine = Engine::new();
+        engine.execute(Command::CanvasNew { width: 2, height: 1 }).unwrap();
+        engine.execute(Command::LayerAdd { name: "top".to_string() }).unwrap();
+        engine.execute(Command::PixelSet { x: 0, y: 0, color: [1, 2, 3, 4] }).unwrap();
+        engine.execute(Command::LayerRemove { index: 1 }).unwrap();
+        assert_eq!(engine.document().unwrap().layer_count(), 1);
+
+        assert!(engine.undo());
+        let doc = engine.document().unwrap();
+        assert_eq!(doc.layer_count(), 2);
+        assert_eq!(doc.get_pixel_on(1, 0, 0).unwrap(), [1, 2, 3, 4]);
     }
 
     #[test]

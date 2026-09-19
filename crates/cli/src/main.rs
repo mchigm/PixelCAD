@@ -51,7 +51,9 @@ fn run_script(script_path: &str, out_path: &str) -> Result<(), String> {
         .document()
         .ok_or_else(|| "script never ran canvas.new; nothing to export".to_string())?;
 
-    write_png(out_path, document.width(), document.height(), document.pixels())
+    // Export the *composited* stack, not any single layer's buffer: the PNG
+    // must show exactly what the GUI shows.
+    write_png(out_path, document.width(), document.height(), &document.composite())
         .map_err(|e| format!("failed to write {out_path}: {e}"))
 }
 

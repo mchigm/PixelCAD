@@ -11,6 +11,6 @@ pub mod engine;
 pub mod parser;
 
 pub use command::Command;
-pub use document::{Color, Document, DocumentError, TRANSPARENT};
+pub use document::{Color, Document, DocumentError, Layer, OPAQUE, TRANSPARENT};
 pub use engine::{Engine, EngineError, DEFAULT_PALETTE, PALETTE_SIZE};
 pub use parser::{parse_line, parse_script, serialize_command, serialize_script, ParseError};
