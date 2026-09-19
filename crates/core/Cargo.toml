@@ -6,5 +6,6 @@ license.workspace = true
 description = "Headless document model and typed command engine for PixelCAD."
 
 [dependencies]
+thiserror = "1"
 
 [dev-dependencies]

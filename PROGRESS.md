@@ -1,8 +1,8 @@
 # PROGRESS — PixelCAD Phase 0: Bootstrap & Command Engine
 
-**Last updated:** 2026-09-19T00:00:00+08:00
-**Current task:** Task 1 — Repository bootstrap
-**Completed tasks:** none
+**Last updated:** 2026-09-19T00:15:00+08:00
+**Current task:** Task 2 — Document model (pixelcad-core)
+**Completed tasks:** 1
 **Current mode:** A
 
 ## Log
@@ -20,8 +20,16 @@
 - Conclusion: slint tolerates this path. No Mode B pivot needed for the GUI surface. Proceeding with Task 5 design as planned in PLAN.md.
 - Probe crate deleted; no trace left in the tree.
 
+### 2026-09-19T00:15:00+08:00 — Task 1 complete
+- Implemented: `.gitignore` fixed per I1 (`*.log`, `/target`, `out.png` added; `/Profiles`, `/Skills`, `/Agents`, `/cache` left as-is pending I2 answer); `LICENSE` (MIT); `README.md` (workspace overview + usage); `Cargo.toml` workspace with members `crates/core`, `crates/app`, `crates/cli`; each crate stubbed with a minimal `Cargo.toml` and placeholder `src/{lib,main}.rs`; `Plans/archive/.gitkeep` to version the empty archive dir.
+- Tests: no tests yet at this stage; `cargo build` succeeded (0.40s) on the stub workspace — this is Task 1's own Done-when criterion.
+- Mode used: A (sequential; no blockers).
+- Deviations from PLAN.md: none. I2 (Profiles/Skills versioning contradiction) not yet resolved — see "Current Blockers" / question posed to maintainer in session output. Proceeding per instructions with Tasks 2-7 while awaiting an answer; fallback (leave untracked, AC8 = PARTIAL) will apply if none arrives before close-out.
+- Files modified: `.gitignore`, `LICENSE`, `README.md`, `Cargo.toml`, `Cargo.lock`, `Plans/archive/.gitkeep`, `crates/core/Cargo.toml`, `crates/core/src/lib.rs`, `crates/cli/Cargo.toml`, `crates/cli/src/main.rs`, `crates/app/Cargo.toml`, `crates/app/src/main.rs`, `PROGRESS.md`.
+- Committed: `84400ce` "Task 1: repository bootstrap".
+
 ## Current Blockers
-[Empty]
+[Empty — I2 is a non-blocking open question, see Log; Tasks 2-7 proceed regardless.]
 
 ## Backlog (out-of-scope items discovered during execution)
 [none yet]

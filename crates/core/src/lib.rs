@@ -4,3 +4,7 @@
 //! It is the single source of truth for document state and command
 //! execution, shared verbatim by the GUI shell (`pixelcad-app`) and the
 //! headless CLI (`pixelcad-cli`).
+
+pub mod document;
+
+pub use document::{Color, Document, DocumentError, TRANSPARENT};
