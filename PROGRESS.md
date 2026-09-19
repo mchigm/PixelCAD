@@ -1,8 +1,8 @@
 # PROGRESS — PixelCAD Phase 0: Bootstrap & Command Engine
 
-**Last updated:** 2026-09-19T00:15:00+08:00
-**Current task:** Task 2 — Document model (pixelcad-core)
-**Completed tasks:** 1
+**Last updated:** 2026-09-19T00:30:00+08:00
+**Current task:** Task 3 — Command engine (pixelcad-core)
+**Completed tasks:** 1, 2
 **Current mode:** A
 
 ## Log
@@ -27,6 +27,15 @@
 - Deviations from PLAN.md: none. I2 (Profiles/Skills versioning contradiction) not yet resolved — see "Current Blockers" / question posed to maintainer in session output. Proceeding per instructions with Tasks 2-7 while awaiting an answer; fallback (leave untracked, AC8 = PARTIAL) will apply if none arrives before close-out.
 - Files modified: `.gitignore`, `LICENSE`, `README.md`, `Cargo.toml`, `Cargo.lock`, `Plans/archive/.gitkeep`, `crates/core/Cargo.toml`, `crates/core/src/lib.rs`, `crates/cli/Cargo.toml`, `crates/cli/src/main.rs`, `crates/app/Cargo.toml`, `crates/app/src/main.rs`, `PROGRESS.md`.
 - Committed: `84400ce` "Task 1: repository bootstrap".
+
+### 2026-09-19T00:30:00+08:00 — Task 2 complete
+- Implemented: `crates/core/src/document.rs` — `Document` (width/height + packed RGBA8 `Vec<u8>` buffer), `get_pixel`/`set_pixel` with bounds checking, `content_hash()` (hand-rolled FNV-1a, 64-bit, zero-dependency, deterministic across platforms/Rust versions), `DocumentError` via `thiserror`. Re-exported from `crates/core/src/lib.rs`.
+- Tests: 6 passed / 0 failed (`cargo test -p pixelcad-core`) — construction/default-transparency, zero-size rejection, set/get round-trip incl. neighbour isolation, out-of-bounds errors, hash determinism, hash sensitivity to both pixels and dimensions.
+- Mode used: A (sequential; no blockers). Fixed one `unused_mut` warning during implementation (not a failed attempt, not a Mode B trigger).
+- Deviations from PLAN.md: PLAN.md suggested "blake3 or fnv content hash"; implemented a minimal hand-rolled FNV-1a instead of pulling in the `fnv` crate, to keep `core`'s dependency surface as small as possible. Same algorithm family, same determinism guarantee.
+- Mode D regression check: `cargo build` (workspace) and `cargo test` (workspace) both pass after this change to shared infrastructure (`core` is depended on by `app` and `cli`).
+- Files modified: `crates/core/Cargo.toml` (added `thiserror`), `crates/core/src/document.rs` (new), `crates/core/src/lib.rs`.
+- Committed: `bcd8edf` "Task 2: document model (pixelcad-core)".
 
 ## Current Blockers
 [Empty — I2 is a non-blocking open question, see Log; Tasks 2-7 proceed regardless.]
