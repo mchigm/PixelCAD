@@ -11,7 +11,7 @@ use std::fs;
 use std::io::BufWriter;
 use std::process::ExitCode;
 
-use pixelcad_core::{parse_script, Engine};
+use pixelcad_core::open_project;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -34,18 +34,18 @@ fn run(args: &[String]) -> Result<(), String> {
 }
 
 fn usage() -> String {
-    "usage: pixelcad-cli run <script.pxc> --out <output.png>".to_string()
+    "usage: pixelcad-cli run <script.pxc|project.pxcproj> --out <output.png>".to_string()
 }
 
 fn run_script(script_path: &str, out_path: &str) -> Result<(), String> {
     let text = fs::read_to_string(script_path)
         .map_err(|e| format!("failed to read {script_path}: {e}"))?;
 
-    let commands =
-        parse_script(&text).map_err(|e| format!("parse error in {script_path}: {e}"))?;
-
-    let mut engine = Engine::new();
-    engine.execute_all(commands).map_err(|e| format!("execution error: {e}"))?;
+    // One code path for both formats: `open_project` accepts a versioned
+    // `.pxcproj` and a bare Phase 0 `.pxc` script alike, and refuses to
+    // return an engine at all unless the entire file parsed and replayed.
+    let engine =
+        open_project(&text).map_err(|e| format!("cannot open {script_path}: {e}"))?;
 
     let document = engine
         .document()

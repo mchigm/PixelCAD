@@ -9,8 +9,13 @@ pub mod command;
 pub mod document;
 pub mod engine;
 pub mod parser;
+pub mod project;
 
 pub use command::Command;
 pub use document::{Color, Document, DocumentError, Layer, OPAQUE, TRANSPARENT};
 pub use engine::{Engine, EngineError, SelectionRect, DEFAULT_PALETTE, PALETTE_SIZE};
 pub use parser::{parse_line, parse_script, serialize_command, serialize_script, ParseError};
+pub use project::{
+    open_project, parse_project, serialize_project, OpenError, Project, ProjectError,
+    LEGACY_SCRIPT_VERSION, PROJECT_FORMAT_VERSION,
+};
