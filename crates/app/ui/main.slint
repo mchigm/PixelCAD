@@ -24,9 +24,19 @@ export component AppWindow inherits Window {
     in property <[string]> tool-labels;
     in property <int> selected-tool;
     in property <int> brush-size;
+    in property <string> brush-shape;
+    in property <int> tolerance;
+    in property <int> stroke-opacity;
     in property <[LayerRow]> layers;
     in property <int> active-layer;
     in property <bool> has-selection;
+    in property <bool> grid-on;
+    in property <bool> has-clipboard;
+    in property <[color]> recent-colors;
+    in property <int> zoom-level;
+    in-out property <string> text-input: "LABEL";
+    in-out property <string> size-w: "64";
+    in-out property <string> size-h: "64";
 
     // --- State the UI owns and Rust only reads via a callback argument. ---
     in-out property <string> save-path: "session.pxc";
@@ -44,6 +54,9 @@ export component AppWindow inherits Window {
     callback swatch-applied(string);
     callback tool-selected(int);
     callback brush-size-changed(int);
+    callback brush-shape-toggled();
+    callback tolerance-changed(int);
+    callback stroke-opacity-changed(int);
     callback undo-clicked();
     callback redo-clicked();
     callback save-clicked(string);
@@ -54,6 +67,27 @@ export component AppWindow inherits Window {
     callback layer-selected(int);
     callback layer-visibility-toggled(int);
     callback selection-cleared();
+    callback select-all-clicked();
+    callback delete-clicked();
+    callback cut-clicked();
+    callback copy-clicked();
+    callback copy-composite-clicked();
+    callback paste-clicked();
+    callback flip-clicked(string);
+    callback rotate-clicked();
+    callback crop-clicked();
+    callback grid-toggled();
+    callback zoom-fit-clicked();
+    callback zoom-actual-clicked();
+    callback layer-duplicate-clicked();
+    callback layer-merge-clicked();
+    callback text-changed(string);
+    callback recent-clicked(int);
+    callback resize-canvas-clicked(string, string);
+    callback scale-selection-clicked(string, string);
+    callback layer-up-clicked();
+    callback layer-down-clicked();
+    callback viewport-resized(float, float);
     /// A raw key press. Rust owns the whole shortcut table so the mapping is
     /// testable without a window; the UI only forwards characters.
     callback key-pressed(string, bool) -> bool;
@@ -131,6 +165,89 @@ export component AppWindow inherits Window {
             }
 
             HorizontalLayout {
+                spacing: 6px;
+                height: 30px;
+
+                select-all-btn := Button {
+                    text: "All";
+                    clicked => { root.select-all-clicked(); }
+                }
+                cut-btn := Button {
+                    text: "Cut";
+                    enabled: root.has-selection;
+                    clicked => { root.cut-clicked(); }
+                }
+                copy-btn := Button {
+                    text: "Copy";
+                    clicked => { root.copy-clicked(); }
+                }
+                copy-composite-btn := Button {
+                    text: "Copy vis.";
+                    clicked => { root.copy-composite-clicked(); }
+                }
+                paste-btn := Button {
+                    text: "Paste";
+                    enabled: root.has-clipboard;
+                    clicked => { root.paste-clicked(); }
+                }
+                delete-btn := Button {
+                    text: "Delete";
+                    enabled: root.has-selection;
+                    clicked => { root.delete-clicked(); }
+                }
+                Rectangle { width: 6px; }
+                flip-h-btn := Button {
+                    text: "Flip H";
+                    enabled: root.has-selection;
+                    clicked => { root.flip-clicked("horizontal"); }
+                }
+                flip-v-btn := Button {
+                    text: "Flip V";
+                    enabled: root.has-selection;
+                    clicked => { root.flip-clicked("vertical"); }
+                }
+                rotate-btn := Button {
+                    text: "Rotate";
+                    enabled: root.has-selection;
+                    clicked => { root.rotate-clicked(); }
+                }
+                crop-btn := Button {
+                    text: "Crop";
+                    enabled: root.has-selection;
+                    clicked => { root.crop-clicked(); }
+                }
+                Rectangle { width: 6px; }
+                w-edit := LineEdit { text <=> root.size-w; width: 52px; }
+                h-edit := LineEdit { text <=> root.size-h; width: 52px; }
+                resize-btn := Button {
+                    text: "Resize";
+                    clicked => { root.resize-canvas-clicked(root.size-w, root.size-h); }
+                }
+                scale-sel-btn := Button {
+                    text: "Scale sel";
+                    enabled: root.has-selection;
+                    clicked => { root.scale-selection-clicked(root.size-w, root.size-h); }
+                }
+                Rectangle { width: 6px; }
+                grid-btn := Button {
+                    text: root.grid-on ? "Grid on" : "Grid off";
+                    clicked => { root.grid-toggled(); }
+                }
+                zoom-fit-btn := Button {
+                    text: "Fit";
+                    clicked => { root.zoom-fit-clicked(); }
+                }
+                zoom-actual-btn := Button {
+                    text: "1:1";
+                    clicked => { root.zoom-actual-clicked(); }
+                }
+                Text {
+                    text: root.zoom-level + "x";
+                    vertical-alignment: center;
+                }
+            }
+
+            HorizontalLayout {
                 spacing: 12px;
 
                 // ------------------------------------------- left sidebar
@@ -161,6 +278,46 @@ export component AppWindow inherits Window {
                         brush-up-btn := Button {
                             text: "+";
                             clicked => { root.brush-size-changed(root.brush-size + 1); }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 4px;
+                        brush-shape-btn := Button {
+                            text: root.brush-shape;
+                            clicked => { root.brush-shape-toggled(); }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 4px;
+                        Text {
+                            text: "Tol " + root.tolerance;
+                            vertical-alignment: center;
+                        }
+                        tol-down-btn := Button {
+                            text: "-";
+                            clicked => { root.tolerance-changed(root.tolerance - 8); }
+                        }
+                        tol-up-btn := Button {
+                            text: "+";
+                            clicked => { root.tolerance-changed(root.tolerance + 8); }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 4px;
+                        Text {
+                            text: "Op " + root.stroke-opacity;
+                            vertical-alignment: center;
+                        }
+                        op-down-btn := Button {
+                            text: "-";
+                            clicked => { root.stroke-opacity-changed(root.stroke-opacity - 32); }
+                        }
+                        op-up-btn := Button {
+                            text: "+";
+                            clicked => { root.stroke-opacity-changed(root.stroke-opacity + 32); }
                         }
                     }
 
@@ -201,6 +358,29 @@ export component AppWindow inherits Window {
                             }
                         }
                     }
+                    Text { text: "Recent"; font-weight: 700; }
+                    HorizontalLayout {
+                        spacing: 2px;
+                        height: 18px;
+                        for c[i] in root.recent-colors: Rectangle {
+                            width: 18px;
+                            height: 18px;
+                            background: c;
+                            border-width: 1px;
+                            border-color: #808080;
+                            recent-swatch := TouchArea {
+                                clicked => { root.recent-clicked(i); }
+                            }
+                        }
+                    }
+
+                    Text { text: "Text tool"; font-weight: 700; }
+                    text-edit := LineEdit {
+                        text <=> root.text-input;
+                        width: 170px;
+                        edited => { root.text-changed(self.text); }
+                    }
+
                     HorizontalLayout {
                         spacing: 4px;
                         hex-edit := LineEdit {
@@ -219,6 +399,10 @@ export component AppWindow inherits Window {
                     min-width: 512px;
                     clip: true;
                     background: #2b2b2b;
+
+                    // Report our real size to Rust so "Fit" is exact.
+                    changed width => { root.viewport-resized(self.width / 1px, self.height / 1px); }
+                    changed height => { root.viewport-resized(self.width / 1px, self.height / 1px); }
 
                     Image {
                         source: root.canvas-image;
@@ -268,6 +452,26 @@ export component AppWindow inherits Window {
                     layer-add-btn := Button {
                         text: "Add layer";
                         clicked => { root.layer-add-clicked(); }
+                    }
+                    HorizontalLayout {
+                        spacing: 4px;
+                        layer-up-btn := Button {
+                            text: "Raise";
+                            clicked => { root.layer-up-clicked(); }
+                        }
+                        layer-down-btn := Button {
+                            text: "Lower";
+                            clicked => { root.layer-down-clicked(); }
+                        }
+                    }
+                    layer-duplicate-btn := Button {
+                        text: "Duplicate layer";
+                        clicked => { root.layer-duplicate-clicked(); }
+                    }
+                    layer-merge-btn := Button {
+                        text: "Merge down";
+                        enabled: root.layers.length > 1;
+                        clicked => { root.layer-merge-clicked(); }
                     }
                     layer-remove-btn := Button {
                         text: "Delete layer";

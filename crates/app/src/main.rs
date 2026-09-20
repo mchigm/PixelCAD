@@ -26,6 +26,7 @@ use slint::{
 };
 
 use controller::{Controller, Tool};
+use pixelcad_core::{Axis, BrushShape};
 
 const DEFAULT_CANVAS_WIDTH: u32 = 64;
 const DEFAULT_CANVAS_HEIGHT: u32 = 64;
@@ -63,7 +64,16 @@ fn refresh(app: &AppWindow, controller: &Controller) {
     app.set_can_undo(controller.can_undo());
     app.set_can_redo(controller.can_redo());
     app.set_has_selection(controller.selection().is_some());
+    app.set_grid_on(controller.grid_enabled());
+    app.set_has_clipboard(controller.clipboard().is_some());
+    app.set_zoom_level(controller.zoom() as i32);
+    let recent: Vec<SlintColor> =
+        controller.recent_colors().iter().copied().map(to_slint_color).collect();
+    app.set_recent_colors(ModelRc::new(VecModel::from(recent)));
     app.set_brush_size(controller.brush_size() as i32);
+    app.set_brush_shape(controller.brush_shape().name().into());
+    app.set_tolerance(controller.tolerance() as i32);
+    app.set_stroke_opacity(controller.opacity() as i32);
     app.set_selected_tool(
         Tool::ALL.iter().position(|t| *t == controller.tool()).unwrap_or(0) as i32,
     );
@@ -99,6 +109,23 @@ fn handle_shortcut(controller: &mut Controller, text: &str, accel: bool) -> bool
         return false;
     };
 
+    // Named keys arrive as multi-character strings, so they are matched
+    // before the single-character table.
+    match text {
+        "\u{7f}" | "\u{8}" => {
+            // Delete / Backspace clear the selection's pixels. With no
+            // selection this is deliberately a no-op rather than "erase
+            // everything", which would be an unrecoverable surprise.
+            let _ = controller.delete_selection();
+            return true;
+        }
+        "\u{f700}" => return nudge(controller, 0, -1),
+        "\u{f701}" => return nudge(controller, 0, 1),
+        "\u{f702}" => return nudge(controller, -1, 0),
+        "\u{f703}" => return nudge(controller, 1, 0),
+        _ => {}
+    }
+
     if accel {
         return match ch.to_ascii_lowercase() {
             // Shift+Cmd/Ctrl+Z arrives as an uppercase 'Z'.
@@ -110,8 +137,66 @@ fn handle_shortcut(controller: &mut Controller, text: &str, accel: bool) -> bool
                 controller.undo();
                 true
             }
-            'd' => {
+            'a' => {
+                let _ = controller.select_all();
+                true
+            }
+            // Shift+Cmd/Ctrl+C is Paint's "copy visible layers", a
+            // genuinely different operation from an ordinary copy.
+            'c' if ch.is_uppercase() => {
+                controller.copy_composite();
+                true
+            }
+            'c' => {
+                controller.copy();
+                true
+            }
+            'x' => {
+                let _ = controller.cut();
+                true
+            }
+            'v' => {
+                let _ = controller.paste();
+                true
+            }
+            'd' if ch.is_uppercase() => {
                 let _ = controller.clear_selection();
+                true
+            }
+            'd' => {
+                let _ = controller.duplicate_selection();
+                true
+            }
+            'j' => {
+                let _ = controller.duplicate_active_layer();
+                true
+            }
+            'e' => {
+                let _ = controller.merge_active_layer_down();
+                true
+            }
+            'n' => {
+                let _ = controller.add_layer();
+                true
+            }
+            'h' => {
+                let _ = controller.flip_selection(Axis::Horizontal);
+                true
+            }
+            'u' => {
+                let _ = controller.flip_selection(Axis::Vertical);
+                true
+            }
+            'r' => {
+                let _ = controller.rotate_selection(90);
+                true
+            }
+            '0' => {
+                controller.zoom_to_actual_size();
+                true
+            }
+            '9' => {
+                controller.zoom_to_fit();
                 true
             }
             _ => false,
@@ -140,6 +225,12 @@ fn handle_shortcut(controller: &mut Controller, text: &str, accel: bool) -> bool
             controller.zoom_out();
             true
         }
+        'g' | 'G' => {
+            // Note: 'g' is the fill tool's shortcut and is consumed above,
+            // so this is only reached for the uppercase form.
+            controller.toggle_grid();
+            true
+        }
         // Digits 1-8 pick the first palette row.
         '1'..='8' => {
             controller.select_palette(ch as usize - '1' as usize);
@@ -147,6 +238,11 @@ fn handle_shortcut(controller: &mut Controller, text: &str, accel: bool) -> bool
         }
         _ => false,
     }
+}
+
+/// Arrow-key nudge: moves the selected pixels by one.
+fn nudge(controller: &mut Controller, dx: i64, dy: i64) -> bool {
+    controller.nudge(dx, dy).is_ok()
 }
 
 /// Registers every UI -> `Controller` callback. Shared between `main()` and
@@ -195,6 +291,19 @@ fn wire_callbacks(app: &AppWindow, controller: Rc<RefCell<Controller>>) {
     on!(on_brush_size_changed, |c, size: i32| {
         c.set_brush_size(size.max(0) as u32);
     });
+    on!(on_brush_shape_toggled, |c| {
+        let next = match c.brush_shape() {
+            BrushShape::Square => BrushShape::Round,
+            BrushShape::Round => BrushShape::Square,
+        };
+        c.set_brush_shape(next);
+    });
+    on!(on_tolerance_changed, |c, value: i32| {
+        c.set_tolerance(value.clamp(0, 255) as u8);
+    });
+    on!(on_stroke_opacity_changed, |c, value: i32| {
+        c.set_opacity(value.clamp(0, 255) as u8);
+    });
     on!(on_undo_clicked, |c| {
         c.undo();
     });
@@ -213,9 +322,126 @@ fn wire_callbacks(app: &AppWindow, controller: Rc<RefCell<Controller>>) {
     on!(on_selection_cleared, |c| {
         let _ = c.clear_selection();
     });
+    on!(on_select_all_clicked, |c| {
+        let _ = c.select_all();
+    });
+    on!(on_delete_clicked, |c| {
+        let _ = c.delete_selection();
+    });
+    on!(on_cut_clicked, |c| {
+        let _ = c.cut();
+    });
+    on!(on_copy_clicked, |c| {
+        c.copy();
+    });
+    on!(on_copy_composite_clicked, |c| {
+        c.copy_composite();
+    });
+    on!(on_paste_clicked, |c| {
+        let _ = c.paste();
+    });
+    on!(on_rotate_clicked, |c| {
+        let _ = c.rotate_selection(90);
+    });
+    on!(on_crop_clicked, |c| {
+        let _ = c.crop_to_selection();
+    });
+    on!(on_grid_toggled, |c| {
+        c.toggle_grid();
+    });
+    on!(on_zoom_fit_clicked, |c| {
+        c.zoom_to_fit();
+    });
+    on!(on_viewport_resized, |c, w: f32, h: f32| {
+        // Pure view state, never recorded. Kept current so zoom-to-fit uses
+        // the real viewport instead of a guess. Slint fires size changes on
+        // every layout pass, so ignore the ones that change nothing.
+        let size = (w.max(1.0) as u32, h.max(1.0) as u32);
+        if c.viewport() != size {
+            c.set_viewport(size.0, size.1);
+        }
+    });
+    on!(on_zoom_actual_clicked, |c| {
+        c.zoom_to_actual_size();
+    });
+    on!(on_layer_duplicate_clicked, |c| {
+        let _ = c.duplicate_active_layer();
+    });
+    on!(on_layer_merge_clicked, |c| {
+        let _ = c.merge_active_layer_down();
+    });
+    on!(on_layer_up_clicked, |c| {
+        let to = c.active_layer_index() + 1;
+        let _ = c.move_active_layer(to);
+    });
+    on!(on_layer_down_clicked, |c| {
+        let to = c.active_layer_index().saturating_sub(1);
+        let _ = c.move_active_layer(to);
+    });
+    on!(on_recent_clicked, |c, index: i32| {
+        if let Some(color) = c.recent_colors().get(index.max(0) as usize).copied() {
+            let _ = c.set_color(color);
+        }
+    });
 
     // Callbacks that also report a status message need the app handle
     // inside the body, so they are written out longhand.
+    {
+        let controller = controller.clone();
+        let app_weak = app.as_weak();
+        app.on_resize_canvas_clicked(move |w, h| {
+            let message = match parse_size(&w, &h) {
+                Some((w, h)) => match controller.borrow_mut().resize_canvas(w, h) {
+                    Ok(()) => format!("Resized to {w}x{h}"),
+                    Err(e) => format!("Resize failed: {e}"),
+                },
+                None => "Width and height must be positive whole numbers".to_string(),
+            };
+            if let Some(app) = app_weak.upgrade() {
+                app.set_status_message(message.into());
+                refresh(&app, &controller.borrow());
+            }
+        });
+    }
+    {
+        let controller = controller.clone();
+        let app_weak = app.as_weak();
+        app.on_scale_selection_clicked(move |w, h| {
+            let message = match parse_size(&w, &h) {
+                Some((w, h)) => match controller.borrow_mut().scale_selection(w, h) {
+                    Ok(()) => format!("Selection scaled to {w}x{h}"),
+                    Err(e) => format!("Scale failed: {e}"),
+                },
+                None => "Width and height must be positive whole numbers".to_string(),
+            };
+            if let Some(app) = app_weak.upgrade() {
+                app.set_status_message(message.into());
+                refresh(&app, &controller.borrow());
+            }
+        });
+    }
+    {
+        let controller = controller.clone();
+        let app_weak = app.as_weak();
+        app.on_flip_clicked(move |axis| {
+            let axis = if axis.as_str() == "vertical" { Axis::Vertical } else { Axis::Horizontal };
+            let _ = controller.borrow_mut().flip_selection(axis);
+            if let Some(app) = app_weak.upgrade() {
+                refresh(&app, &controller.borrow());
+            }
+        });
+    }
+    {
+        let controller = controller.clone();
+        app.on_text_changed(move |text| {
+            // Pure tool state: no re-render needed and nothing recorded
+            // until the text is actually stamped on the canvas.
+            let mut c = controller.borrow_mut();
+            if c.text_buffer() != text.as_str() {
+                c.set_text_buffer(text.as_str());
+            }
+        });
+    }
     {
         let controller = controller.clone();
         let app_weak = app.as_weak();
@@ -298,6 +524,16 @@ fn wire_callbacks(app: &AppWindow, controller: Rc<RefCell<Controller>>) {
     }
 }
 
+/// Parses the two size fields, rejecting anything that is not a positive
+/// whole number. Returning `None` rather than clamping means a typo is
+/// reported instead of silently resizing to something the user did not ask
+/// for.
+fn parse_size(w: &str, h: &str) -> Option<(u32, u32)> {
+    let w: u32 = w.trim().parse().ok()?;
+    let h: u32 = h.trim().parse().ok()?;
+    (w > 0 && h > 0).then_some((w, h))
+}
+
 fn status_of(result: std::io::Result<()>, path: &str, verb: &str) -> String {
     match result {
         Ok(()) => format!("{verb} {path}"),
@@ -366,6 +602,11 @@ mod gui_tests {
         window.dispatch_event(WindowEvent::KeyPressed { text: text.into() });
         window.dispatch_event(WindowEvent::KeyReleased { text: text.into() });
         window.dispatch_event(WindowEvent::KeyReleased { text: ctrl });
+    }
+
+    /// Number of non-transparent pixels in the composited document.
+    fn painted_count(controller: &Rc<RefCell<Controller>>) -> usize {
+        controller.borrow().document().composite().chunks(4).filter(|p| p[3] != 0).count()
     }
 
     /// Draws one pixel at document (0,0) through the controller directly.
@@ -803,6 +1044,225 @@ mod gui_tests {
         assert!(app.get_has_selection(), "the marquee must be reflected in the UI");
         find_one(&app, "AppWindow::deselect-btn").mock_single_click(PointerEventButton::Left);
         assert!(!app.get_has_selection());
+    }
+
+
+    // ------------------------------------------------ Phase 1.5 GUI tests
+
+    #[test]
+    fn select_all_and_delete_work_from_the_toolbar() {
+        let (app, controller) = new_app_with_controller();
+        draw_one_pixel(&app, &controller);
+        assert_eq!(painted_count(&controller), 1);
+
+        find_one(&app, "AppWindow::select-all-btn").mock_single_click(PointerEventButton::Left);
+        assert!(app.get_has_selection());
+        assert_eq!(controller.borrow().selection().unwrap().count(), 64 * 64);
+
+        find_one(&app, "AppWindow::delete-btn").mock_single_click(PointerEventButton::Left);
+        assert_eq!(painted_count(&controller), 0, "delete clears the selected pixels");
+    }
+
+    #[test]
+    fn the_accelerator_selects_all_and_delete_clears() {
+        let (app, controller) = new_app_with_controller();
+        draw_one_pixel(&app, &controller);
+        press_accel(&app, "a");
+        assert!(app.get_has_selection());
+        press_key(&app, "\u{7f}");
+        assert_eq!(painted_count(&controller), 0);
+    }
+
+    #[test]
+    fn arrow_keys_nudge_the_selected_pixels() {
+        let (app, controller) = new_app_with_controller();
+        draw_one_pixel(&app, &controller); // doc (0,0)
+        {
+            let mut c = controller.borrow_mut();
+            c.select_all().unwrap();
+        }
+        refresh(&app, &controller.borrow());
+
+        press_key(&app, "\u{f703}"); // right
+        press_key(&app, "\u{f701}"); // down
+        let doc = controller.borrow().document().clone();
+        assert_ne!(doc.get_pixel(1, 1).unwrap()[3], 0, "the pixel moved to (1,1)");
+        assert_eq!(doc.get_pixel(0, 0).unwrap()[3], 0, "and left its old cell empty");
+    }
+
+    #[test]
+    fn cut_copy_and_paste_round_trip_through_the_toolbar() {
+        let (app, controller) = new_app_with_controller();
+        {
+            let mut c = controller.borrow_mut();
+            c.select_palette(4); // red
+            c.begin_stroke(4.0, 4.0).unwrap(); // doc (0,0)
+            c.end_drag().unwrap();
+            c.engine_select_rect(0, 0, 1, 1);
+        }
+        refresh(&app, &controller.borrow());
+        let ink = controller.borrow().document().get_pixel(0, 0).unwrap();
+
+        find_one(&app, "AppWindow::cut-btn").mock_single_click(PointerEventButton::Left);
+        assert!(app.get_has_clipboard());
+        assert_eq!(painted_count(&controller), 0, "cut removes the source pixels");
+
+        // Paste somewhere else.
+        {
+            let mut c = controller.borrow_mut();
+            c.paste_at(5, 5).unwrap();
+        }
+        refresh(&app, &controller.borrow());
+        assert_eq!(
+            controller.borrow().document().get_pixel(5, 5).unwrap(),
+            ink,
+            "paste reproduces the cut pixels exactly"
+        );
+    }
+
+    #[test]
+    fn copy_composite_sees_through_the_layer_stack() {
+        let (app, controller) = new_app_with_controller();
+        draw_one_pixel(&app, &controller);
+        find_one(&app, "AppWindow::layer-add-btn").mock_single_click(PointerEventButton::Left);
+
+        // The active (new, empty) layer has nothing; an ordinary copy sees
+        // nothing, a composite copy sees the layer underneath.
+        find_one(&app, "AppWindow::copy-btn").mock_single_click(PointerEventButton::Left);
+        let plain = controller.borrow().clipboard().unwrap().pixels.iter().any(|b| *b != 0);
+        find_one(&app, "AppWindow::copy-composite-btn")
+            .mock_single_click(PointerEventButton::Left);
+        let composite = controller.borrow().clipboard().unwrap().pixels.iter().any(|b| *b != 0);
+
+        assert!(!plain, "an ordinary copy reads only the active layer");
+        assert!(composite, "a composite copy reads what is visible");
+    }
+
+    #[test]
+    fn duplicate_and_merge_layers_from_the_panel() {
+        let (app, controller) = new_app_with_controller();
+        draw_one_pixel(&app, &controller);
+
+        find_one(&app, "AppWindow::layer-duplicate-btn")
+            .mock_single_click(PointerEventButton::Left);
+        assert_eq!(app.get_layers().row_count(), 2);
+
+        let before = controller.borrow().document().composite();
+        find_one(&app, "AppWindow::layer-merge-btn").mock_single_click(PointerEventButton::Left);
+        assert_eq!(app.get_layers().row_count(), 1);
+        assert_eq!(
+            controller.borrow().document().composite(),
+            before,
+            "merging must not change the image"
+        );
+    }
+
+    #[test]
+    fn flip_rotate_and_crop_are_reachable_from_the_toolbar() {
+        let (app, controller) = new_app_with_controller();
+        draw_one_pixel(&app, &controller);
+        {
+            let mut c = controller.borrow_mut();
+            c.engine_select_rect(0, 0, 4, 4);
+        }
+        refresh(&app, &controller.borrow());
+
+        find_one(&app, "AppWindow::flip-h-btn").mock_single_click(PointerEventButton::Left);
+        assert_ne!(
+            controller.borrow().document().get_pixel(3, 0).unwrap()[3],
+            0,
+            "flip moved the pixel across the selection box"
+        );
+
+        find_one(&app, "AppWindow::rotate-btn").mock_single_click(PointerEventButton::Left);
+        find_one(&app, "AppWindow::crop-btn").mock_single_click(PointerEventButton::Left);
+        let doc = controller.borrow().document().clone();
+        assert_eq!((doc.width(), doc.height()), (4, 4), "crop resized the canvas");
+    }
+
+    #[test]
+    fn the_grid_toggle_and_zoom_presets_change_view_state_only() {
+        let (app, controller) = new_app_with_controller();
+        draw_one_pixel(&app, &controller);
+        let before = controller.borrow().document().clone();
+
+        assert!(app.get_grid_on());
+        find_one(&app, "AppWindow::grid-btn").mock_single_click(PointerEventButton::Left);
+        assert!(!app.get_grid_on());
+        assert!(!controller.borrow().should_draw_grid(), "the grid is off even at high zoom");
+
+        find_one(&app, "AppWindow::zoom-actual-btn").mock_single_click(PointerEventButton::Left);
+        assert_eq!(controller.borrow().zoom(), 1);
+        assert_eq!(app.get_zoom_level(), 1);
+
+        controller.borrow_mut().set_viewport(512, 512);
+        find_one(&app, "AppWindow::zoom-fit-btn").mock_single_click(PointerEventButton::Left);
+        assert_eq!(controller.borrow().viewport(), (512, 512));
+        assert_eq!(controller.borrow().zoom(), 8, "64px canvas in a 512px viewport fits at 8x");
+
+        assert_eq!(controller.borrow().document(), &before, "no view change touches the document");
+        assert!(!app.get_can_redo());
+    }
+
+    #[test]
+    fn every_new_tool_has_a_working_shortcut() {
+        let (app, controller) = new_app_with_controller();
+        for (index, tool) in Tool::ALL.iter().enumerate() {
+            press_key(&app, &tool.shortcut().to_string());
+            assert_eq!(controller.borrow().tool(), *tool, "key {:?}", tool.shortcut());
+            assert_eq!(app.get_selected_tool(), index as i32);
+        }
+        assert_eq!(Tool::ALL.len(), 12, "all twelve tools are reachable");
+    }
+
+    #[test]
+    fn the_recent_colour_strip_fills_as_colours_are_used() {
+        let (app, controller) = new_app_with_controller();
+        assert_eq!(app.get_recent_colors().row_count(), 0);
+
+        app.invoke_palette_clicked(4);
+        app.invoke_palette_clicked(6);
+        assert_eq!(app.get_recent_colors().row_count(), 2);
+
+        // Re-using a colour moves it to the front rather than duplicating.
+        app.invoke_palette_clicked(4);
+        assert_eq!(app.get_recent_colors().row_count(), 2);
+        assert_eq!(controller.borrow().recent_colors()[0], controller.borrow().palette()[4]);
+    }
+
+    #[test]
+    fn the_text_tool_stamps_the_typed_buffer() {
+        let (app, controller) = new_app_with_controller();
+        app.invoke_text_changed("HI".into());
+        assert_eq!(controller.borrow().text_buffer(), "HI");
+        press_key(&app, "t");
+        assert_eq!(controller.borrow().tool(), Tool::Text);
+
+        {
+            let mut c = controller.borrow_mut();
+            c.begin_stroke(80.0, 80.0).unwrap();
+            c.end_drag().unwrap();
+        }
+        refresh(&app, &controller.borrow());
+        assert!(painted_count(&controller) > 0, "text must put ink on the canvas");
+    }
+
+    #[test]
+    fn a_lasso_drag_produces_a_non_rectangular_selection() {
+        let (app, controller) = new_app_with_controller();
+        press_key(&app, "f"); // lasso
+        {
+            let mut c = controller.borrow_mut();
+            c.begin_stroke(0.0, 0.0).unwrap();
+            c.continue_drag(80.0, 0.0).unwrap();
+            c.continue_drag(0.0, 80.0).unwrap();
+            c.end_drag().unwrap();
+        }
+        refresh(&app, &controller.borrow());
+        let c = controller.borrow();
+        let s = c.selection().expect("the lasso must have selected something");
+        assert!(!s.is_rect(), "a traced triangle is not a rectangle");
+        assert!(app.get_has_selection());
     }
 
     /// The compiled `pixelcad-cli` binary, located relative to this test

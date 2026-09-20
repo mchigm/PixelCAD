@@ -163,6 +163,8 @@ pub struct Controller {
     path: Vec<(i64, i64)>,
     clipboard: Option<Clipboard>,
     recent_colors: Vec<Color>,
+    grid_enabled: bool,
+    viewport: (u32, u32),
     drag: DragMode,
 }
 
@@ -188,6 +190,8 @@ impl Controller {
             path: Vec::new(),
             clipboard: None,
             recent_colors: Vec::new(),
+            grid_enabled: true,
+            viewport: (512, 512),
             drag: DragMode::Idle,
         }
     }
@@ -252,7 +256,50 @@ impl Controller {
     }
 
     pub fn should_draw_grid(&self) -> bool {
-        self.zoom >= crate::render::GRID_ZOOM_THRESHOLD
+        self.grid_enabled && self.zoom >= crate::render::GRID_ZOOM_THRESHOLD
+    }
+
+    pub fn grid_enabled(&self) -> bool {
+        self.grid_enabled
+    }
+
+    pub fn toggle_grid(&mut self) {
+        self.grid_enabled = !self.grid_enabled;
+    }
+
+    /// Resets to 1 document pixel per screen pixel, at the origin.
+    pub fn zoom_to_actual_size(&mut self) {
+        self.zoom = 1;
+        self.pan = (0.0, 0.0);
+    }
+
+    /// Picks the largest integer zoom at which the whole canvas fits in the
+    /// viewport, and centres it.
+    ///
+    /// Integer-only, because a fractional zoom would resample the canvas and
+    /// stop showing the user their actual pixels.
+    pub fn zoom_to_fit(&mut self) {
+        let (vw, vh) = self.viewport;
+        let (dw, dh) = (self.document().width(), self.document().height());
+        if dw == 0 || dh == 0 {
+            return;
+        }
+        let fit_x = (vw / dw).max(MIN_ZOOM);
+        let fit_y = (vh / dh).max(MIN_ZOOM);
+        self.zoom = fit_x.min(fit_y).clamp(MIN_ZOOM, MAX_ZOOM);
+        let shown_w = (dw * self.zoom) as f32;
+        let shown_h = (dh * self.zoom) as f32;
+        self.pan = (((vw as f32 - shown_w) / 2.0).max(0.0), ((vh as f32 - shown_h) / 2.0).max(0.0));
+    }
+
+    /// Tells the controller how big the canvas viewport is, in screen
+    /// pixels. Pure view state; never recorded.
+    pub fn set_viewport(&mut self, width: u32, height: u32) {
+        self.viewport = (width, height);
+    }
+
+    pub fn viewport(&self) -> (u32, u32) {
+        self.viewport
     }
 
     /// `canvas.new` is never undoable from the GUI: undo can only unwind
@@ -372,6 +419,14 @@ impl Controller {
         self.text_buffer = text.into();
     }
 
+    /// Sets the active drawing colour directly, without touching the
+    /// palette. Used by the recent-colours strip and the eyedropper.
+    pub fn set_color(&mut self, color: Color) -> Result<(), EngineError> {
+        self.engine.execute(Command::ColorSet { color })?;
+        self.remember_color(color);
+        Ok(())
+    }
+
     /// Most recently used colours, newest first, capped at 8.
     pub fn recent_colors(&self) -> &[Color] {
         &self.recent_colors
@@ -483,9 +538,17 @@ impl Controller {
 
     /// Pastes the clipboard at `(x, y)` and selects what was pasted.
     ///
-    /// Emitted as `image.import` + `select.rect` in one undo group, so the
+    /// Emitted as `select.rect` + `image.import` in one undo group, so the
     /// paste is fully replayable from the saved script even though the
     /// clipboard itself never enters the command log.
+    ///
+    /// The selection is moved to the destination **before** the import, and
+    /// that order is load-bearing: `image.import` is clipped by the active
+    /// selection like every other write, so pasting while an old marquee
+    /// was still active would silently discard everything outside it.
+    /// Selecting the destination first makes the clip a no-op and leaves
+    /// the pasted region selected, which is what the user expects to drag
+    /// next.
     pub fn paste_at(&mut self, x: i64, y: i64) -> Result<(), EngineError> {
         let Some(clip) = self.clipboard.clone() else {
             return Ok(());
@@ -493,19 +556,19 @@ impl Controller {
         self.engine.begin_group();
         let result = self
             .engine
-            .execute(Command::ImageImport {
+            .execute(Command::SelectRect {
                 x,
                 y,
                 width: clip.width,
                 height: clip.height,
-                data: base64::encode(&clip.pixels),
             })
             .and_then(|()| {
-                self.engine.execute(Command::SelectRect {
+                self.engine.execute(Command::ImageImport {
                     x,
                     y,
                     width: clip.width,
                     height: clip.height,
+                    data: base64::encode(&clip.pixels),
                 })
             });
         self.engine.end_group();
@@ -657,16 +720,16 @@ impl Controller {
                 self.drag = DragMode::Idle;
                 self.stamp_text(x, y)
             }
-            tool if tool.is_path() => {
-                // Free-form: accumulate points now, commit on release.
-                self.path = vec![(x, y)];
+            tool if tool.is_path() || tool.is_anchored() => {
+                // Deferred until release: nothing is committed while the
+                // user is still choosing the end point. Free-form tools
+                // additionally accumulate the path they are traced along.
+                self.path = if tool.is_path() { vec![(x, y)] } else { Vec::new() };
                 self.drag = DragMode::Anchored { origin: (x, y), current: (x, y) };
                 Ok(())
             }
             _ => {
-                // Deferred until release: nothing is committed while the
-                // user is still choosing the end point.
-                self.drag = DragMode::Anchored { origin: (x, y), current: (x, y) };
+                self.drag = DragMode::Idle;
                 Ok(())
             }
         }
@@ -793,6 +856,12 @@ impl Controller {
             }
             _ => Ok(()),
         }
+    }
+
+    /// Test helper: set a rectangular selection directly.
+    #[cfg(test)]
+    pub fn engine_select_rect(&mut self, x: i64, y: i64, width: u32, height: u32) {
+        let _ = self.engine.execute(Command::SelectRect { x, y, width, height });
     }
 
     pub fn clear_selection(&mut self) -> Result<(), EngineError> {
