@@ -188,6 +188,7 @@ mod tests {
             y0: 1,
             x1: 6,
             y1: 6,
+            radius: 0,
             fill: false,
             color: [0x1d, 0x1d, 0x1f, 0xff],
         })

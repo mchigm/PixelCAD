@@ -7,8 +7,9 @@
 //! resulting document is byte-identical, which is what makes CLI replay and
 //! GUI-recorded scripts interchangeable.
 
-use crate::command::{sanitize_name, Command};
-use crate::document::{Color, Document, DocumentError};
+use crate::command::{sanitize_name, Axis, BrushShape, Command};
+use crate::selection::Selection;
+use crate::document::{Color, Document, DocumentError, TRANSPARENT};
 use crate::parser::serialize_script;
 
 /// Number of fixed palette swatches (see PLAN.md Task 5).
@@ -48,29 +49,10 @@ pub enum EngineError {
     Base64(#[from] crate::base64::Base64Error),
     #[error("image.import declares {expected} bytes of pixel data but carries {found}")]
     ImageDataLength { expected: usize, found: usize },
-}
-
-/// A rectangular selection, in document pixel coordinates.
-///
-/// While a selection exists, every pixel-writing command is clipped to it.
-/// An empty rectangle (zero width or height) selects nothing, which makes
-/// drawing a no-op rather than an error — the same thing a real editor does
-/// when you draw outside a marquee.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SelectionRect {
-    pub x: i64,
-    pub y: i64,
-    pub width: u32,
-    pub height: u32,
-}
-
-impl SelectionRect {
-    pub fn contains(&self, x: i64, y: i64) -> bool {
-        x >= self.x
-            && y >= self.y
-            && x < self.x + self.width as i64
-            && y < self.y + self.height as i64
-    }
+    #[error("this command needs an active selection; run select.rect, select.lasso or select.all first")]
+    NoSelection,
+    #[error("rotation must be 90, 180 or 270 degrees (got {degrees})")]
+    UnsupportedRotation { degrees: u32 },
 }
 
 /// The full engine state at one point in history: the document (if a canvas
@@ -82,7 +64,7 @@ struct EngineState {
     document: Option<Document>,
     palette: [Color; PALETTE_SIZE],
     current_color: Color,
-    selection: Option<SelectionRect>,
+    selection: Option<Selection>,
 }
 
 impl Default for EngineState {
@@ -153,8 +135,8 @@ impl Engine {
     }
 
     /// The active rectangular selection, if any.
-    pub fn selection(&self) -> Option<SelectionRect> {
-        self.states[self.cursor].selection
+    pub fn selection(&self) -> Option<&Selection> {
+        self.states[self.cursor].selection.as_ref()
     }
 
     /// The commands currently in effect, flattened across undo steps, in
@@ -301,15 +283,15 @@ fn apply(state: &mut EngineState, command: &Command) -> Result<(), EngineError> 
             Ok(())
         }
         Command::PixelSet { x, y, color } => {
-            let selection = state.selection;
+            let selection = state.selection.clone();
             let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
-            write_strict(doc, selection, x, y, color)
+            write_strict(doc, selection.as_ref(), x, y, color)
         }
         Command::LineDraw { x0, y0, x1, y1, color } => {
-            let selection = state.selection;
+            let selection = state.selection.clone();
             let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
             for (x, y) in bresenham_points(x0, y0, x1, y1) {
-                write_strict(doc, selection, x, y, color)?;
+                write_strict(doc, selection.as_ref(), x, y, color)?;
             }
             Ok(())
         }
@@ -366,15 +348,15 @@ fn apply(state: &mut EngineState, command: &Command) -> Result<(), EngineError> 
             Ok(())
         }
         Command::SelectRect { x, y, width, height } => {
-            state.selection = Some(SelectionRect { x, y, width, height });
+            state.selection = Some(Selection::rect(x, y, width, height));
             Ok(())
         }
         Command::SelectClear => {
             state.selection = None;
             Ok(())
         }
-        Command::BrushStroke { x0, y0, x1, y1, size, color } => {
-            let selection = state.selection;
+        Command::BrushStroke { x0, y0, x1, y1, size, shape, color } => {
+            let selection = state.selection.clone();
             let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
             let size = size.max(1) as i64;
             // Centre the square on the path point. For even sizes the extra
@@ -382,38 +364,302 @@ fn apply(state: &mut EngineState, command: &Command) -> Result<(), EngineError> 
             // rounding) keeps the result identical on every platform.
             let lo = -((size - 1) / 2);
             let hi = size / 2;
+            // Radius test in doubled coordinates so an even diameter has
+            // no centre pixel to bias, and so the whole test is integer.
+            let diameter = size;
+            let limit = (diameter * diameter) as i64;
             for (px, py) in bresenham_points(x0, y0, x1, y1) {
                 for dy in lo..=hi {
                     for dx in lo..=hi {
-                        write_lenient(doc, selection, px + dx, py + dy, color);
+                        if shape == BrushShape::Round {
+                            let ox = 2 * dx + if diameter % 2 == 0 { 1 } else { 0 };
+                            let oy = 2 * dy + if diameter % 2 == 0 { 1 } else { 0 };
+                            if ox * ox + oy * oy > limit {
+                                continue;
+                            }
+                        }
+                        write_lenient(doc, selection.as_ref(), px + dx, py + dy, color);
                     }
                 }
             }
             Ok(())
         }
-        Command::RectDraw { x0, y0, x1, y1, fill, color } => {
-            let selection = state.selection;
+        Command::RectDraw { x0, y0, x1, y1, radius, fill, color } => {
+            let selection = state.selection.clone();
             let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
             let (left, right) = (x0.min(x1), x0.max(x1));
             let (top, bottom) = (y0.min(y1), y0.max(y1));
+            // Corner radius is clamped to half the shorter side: a larger
+            // value would make opposite corners overlap and produce a shape
+            // nobody asked for. Clamping degrades gracefully into a stadium
+            // and then a circle.
+            let max_radius = (((right - left).min(bottom - top)) / 2).max(0) as u32;
+            let radius = radius.min(max_radius) as i64;
+
             for y in top..=bottom {
                 for x in left..=right {
-                    let on_edge = x == left || x == right || y == top || y == bottom;
+                    // Distance into the nearest corner box, if any.
+                    let cx = if x < left + radius {
+                        Some(left + radius)
+                    } else if x > right - radius {
+                        Some(right - radius)
+                    } else {
+                        None
+                    };
+                    let cy = if y < top + radius {
+                        Some(top + radius)
+                    } else if y > bottom - radius {
+                        Some(bottom - radius)
+                    } else {
+                        None
+                    };
+
+                    let (inside, on_edge) = match (cx, cy) {
+                        (Some(cx), Some(cy)) => {
+                            let (dx, dy) = (x - cx, y - cy);
+                            let d2 = dx * dx + dy * dy;
+                            (d2 <= radius * radius, {
+                                let inner = (radius - 1).max(0);
+                                d2 <= radius * radius && d2 > inner * inner
+                            })
+                        }
+                        _ => (true, x == left || x == right || y == top || y == bottom),
+                    };
+
+                    if !inside {
+                        continue;
+                    }
                     if fill || on_edge {
-                        write_lenient(doc, selection, x, y, color);
+                        write_lenient(doc, selection.as_ref(), x, y, color);
                     }
                 }
             }
             Ok(())
         }
-        Command::FillBucket { x, y, color } => {
-            let selection = state.selection;
+        Command::FillBucket { x, y, tolerance, color } => {
+            let selection = state.selection.clone();
             let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
-            flood_fill(doc, selection, x, y, color);
+            flood_fill(doc, selection.as_ref(), x, y, tolerance, color);
+            Ok(())
+        }
+        Command::EllipseDraw { x0, y0, x1, y1, fill, color } => {
+            let selection = state.selection.clone();
+            let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
+            for (x, y) in ellipse_points(x0, y0, x1, y1, fill) {
+                write_lenient(doc, selection.as_ref(), x, y, color);
+            }
+            Ok(())
+        }
+        Command::PolygonDraw { x, y, radius, sides, rotation, fill, color } => {
+            let selection = state.selection.clone();
+            let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
+            let vertices = regular_polygon(x, y, radius, sides, rotation);
+            if vertices.len() < 3 {
+                // Fewer than three sides has no shape to draw. Silently
+                // drawing a line instead would be a worse surprise than
+                // drawing nothing.
+                return Ok(());
+            }
+            for (px, py) in polygon_points(&vertices, fill) {
+                write_lenient(doc, selection.as_ref(), px, py, color);
+            }
+            Ok(())
+        }
+        Command::ArrowDraw { x0, y0, x1, y1, head, color } => {
+            let selection = state.selection.clone();
+            let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
+            for (x, y) in bresenham_points(x0, y0, x1, y1) {
+                write_lenient(doc, selection.as_ref(), x, y, color);
+            }
+            for (x, y) in arrow_head_points(x0, y0, x1, y1, head) {
+                write_lenient(doc, selection.as_ref(), x, y, color);
+            }
+            Ok(())
+        }
+        Command::PolylineDraw { ref points, color } => {
+            let selection = state.selection.clone();
+            let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
+            for pair in points.windows(2) {
+                for (x, y) in bresenham_points(pair[0].0, pair[0].1, pair[1].0, pair[1].1) {
+                    write_lenient(doc, selection.as_ref(), x, y, color);
+                }
+            }
+            if points.len() == 1 {
+                write_lenient(doc, selection.as_ref(), points[0].0, points[0].1, color);
+            }
+            Ok(())
+        }
+        Command::TextDraw { x, y, ref text, font, scale, align, color } => {
+            let selection = state.selection.clone();
+            let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
+            crate::font::rasterize(text, font, scale, x, y, align, |px, py| {
+                write_lenient(doc, selection.as_ref(), px, py, color);
+            });
+            Ok(())
+        }
+
+        Command::SelectAll => {
+            let doc = state.document.as_ref().ok_or(EngineError::NoCanvas)?;
+            state.selection = Some(Selection::all(doc.width(), doc.height()));
+            Ok(())
+        }
+        Command::SelectLasso { ref points } => {
+            state.selection = Some(Selection::from_polygon(points));
+            Ok(())
+        }
+        Command::SelectionDelete => {
+            let Some(selection) = state.selection.clone() else {
+                return Err(EngineError::NoSelection);
+            };
+            let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
+            for (x, y) in selection.cells() {
+                if doc.in_bounds(x, y) {
+                    let _ = doc.set_pixel(x, y, TRANSPARENT);
+                }
+            }
+            Ok(())
+        }
+        Command::SelectionMove { dx, dy } => {
+            let Some(selection) = state.selection.clone() else {
+                return Err(EngineError::NoSelection);
+            };
+            let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
+            // Lift, clear, then drop. Lifting everything *before* clearing
+            // is what makes an overlapping move (the common case: nudging
+            // by one pixel) correct rather than smearing the source across
+            // its own destination.
+            let lifted: Vec<(i64, i64, Color)> = selection
+                .cells()
+                .filter(|&(x, y)| doc.in_bounds(x, y))
+                .map(|(x, y)| (x, y, doc.get_pixel(x, y).unwrap()))
+                .collect();
+            for &(x, y, _) in &lifted {
+                let _ = doc.set_pixel(x, y, TRANSPARENT);
+            }
+            for (x, y, color) in lifted {
+                write_lenient_unmasked(doc, x + dx, y + dy, color);
+            }
+            state.selection = Some(selection.translated(dx, dy));
+            Ok(())
+        }
+        Command::SelectionFlip { axis } => {
+            let Some(selection) = state.selection.clone() else {
+                return Err(EngineError::NoSelection);
+            };
+            let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
+            let (ox, oy, w, h) = selection.bounds();
+            let block = lift_block(doc, &selection);
+            clear_selection_pixels(doc, &selection);
+            for row in 0..h as i64 {
+                for col in 0..w as i64 {
+                    let (sc, sr) = match axis {
+                        Axis::Horizontal => (w as i64 - 1 - col, row),
+                        Axis::Vertical => (col, h as i64 - 1 - row),
+                    };
+                    if let Some(color) = block[(sr * w as i64 + sc) as usize] {
+                        write_lenient_unmasked(doc, ox + col, oy + row, color);
+                    }
+                }
+            }
+            state.selection = Some(match axis {
+                Axis::Horizontal => selection.flipped_horizontally(),
+                Axis::Vertical => selection.flipped_vertically(),
+            });
+            Ok(())
+        }
+        Command::SelectionRotate { degrees } => {
+            let degrees = degrees % 360;
+            if !matches!(degrees, 90 | 180 | 270) {
+                if degrees == 0 {
+                    return Ok(());
+                }
+                return Err(EngineError::UnsupportedRotation { degrees });
+            }
+            let Some(selection) = state.selection.clone() else {
+                return Err(EngineError::NoSelection);
+            };
+            let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
+            let (ox, oy, w, h) = selection.bounds();
+            let block = lift_block(doc, &selection);
+            clear_selection_pixels(doc, &selection);
+
+            // 90 and 270 transpose the box. The result is anchored at the
+            // same top-left corner rather than about the centre, so a
+            // rotation never drifts off-canvas in a way the user did not
+            // ask for.
+            let (nw, nh) = if degrees == 180 { (w, h) } else { (h, w) };
+            for row in 0..nh as i64 {
+                for col in 0..nw as i64 {
+                    let (sc, sr) = match degrees {
+                        90 => (row, h as i64 - 1 - col),
+                        180 => (w as i64 - 1 - col, h as i64 - 1 - row),
+                        _ => (w as i64 - 1 - row, col),
+                    };
+                    if sc < 0 || sr < 0 || sc >= w as i64 || sr >= h as i64 {
+                        continue;
+                    }
+                    if let Some(color) = block[(sr * w as i64 + sc) as usize] {
+                        write_lenient_unmasked(doc, ox + col, oy + row, color);
+                    }
+                }
+            }
+            // The rotated shape is a new shape; the marquee becomes the
+            // rotated bounding box rather than a rotated mask.
+            state.selection = Some(Selection::rect(ox, oy, nw, nh));
+            Ok(())
+        }
+        Command::SelectionScale { width, height } => {
+            if width == 0 || height == 0 {
+                return Err(EngineError::Document(DocumentError::ZeroSize { width, height }));
+            }
+            let Some(selection) = state.selection.clone() else {
+                return Err(EngineError::NoSelection);
+            };
+            let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
+            let (ox, oy, w, h) = selection.bounds();
+            if w == 0 || h == 0 {
+                return Ok(());
+            }
+            let block = lift_block(doc, &selection);
+            clear_selection_pixels(doc, &selection);
+            for row in 0..height as usize {
+                let sr = row * h as usize / height as usize;
+                for col in 0..width as usize {
+                    let sc = col * w as usize / width as usize;
+                    if let Some(color) = block[sr * w as usize + sc] {
+                        write_lenient_unmasked(doc, ox + col as i64, oy + row as i64, color);
+                    }
+                }
+            }
+            state.selection = Some(Selection::rect(ox, oy, width, height));
+            Ok(())
+        }
+
+        Command::CanvasCrop { x, y, width, height } => {
+            let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
+            doc.crop(x, y, width, height)?;
+            // A selection in old coordinates is meaningless after a crop.
+            state.selection = None;
+            Ok(())
+        }
+        Command::CanvasResize { width, height } => {
+            let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
+            doc.resize(width, height)?;
+            state.selection = None;
+            Ok(())
+        }
+        Command::LayerDuplicate { index } => {
+            let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
+            doc.duplicate_layer(index)?;
+            Ok(())
+        }
+        Command::LayerMerge { index } => {
+            let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
+            doc.merge_layer_down(index)?;
             Ok(())
         }
         Command::ImageImport { x, y, width, height, ref data } => {
-            let selection = state.selection;
+            let selection = state.selection.clone();
             let doc = state.document.as_mut().ok_or(EngineError::NoCanvas)?;
             let pixels = crate::base64::decode(data)?;
             let expected = width as usize * height as usize * 4;
@@ -424,7 +670,7 @@ fn apply(state: &mut EngineState, command: &Command) -> Result<(), EngineError> 
                 for col in 0..width as i64 {
                     let i = ((row * width as i64 + col) * 4) as usize;
                     let color = [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]];
-                    write_lenient(doc, selection, x + col, y + row, color);
+                    write_lenient(doc, selection.as_ref(), x + col, y + row, color);
                 }
             }
             Ok(())
@@ -445,9 +691,10 @@ fn apply(state: &mut EngineState, command: &Command) -> Result<(), EngineError> 
 /// comparison, is what bounds the walk).
 fn flood_fill(
     doc: &mut Document,
-    selection: Option<SelectionRect>,
+    selection: Option<&Selection>,
     seed_x: i64,
     seed_y: i64,
+    tolerance: u8,
     color: Color,
 ) {
     if !doc.in_bounds(seed_x, seed_y) {
@@ -481,8 +728,9 @@ fn flood_fill(
                 continue;
             }
         }
-        if doc.get_pixel(x, y).ok() != Some(target) {
-            continue;
+        match doc.get_pixel(x, y) {
+            Ok(here) if within_tolerance(here, target, tolerance) => {}
+            _ => continue,
         }
         write_lenient(doc, selection, x, y, color);
 
@@ -502,7 +750,7 @@ fn flood_fill(
 /// and where Phase 0 already behaved this way.
 fn write_strict(
     doc: &mut Document,
-    selection: Option<SelectionRect>,
+    selection: Option<&Selection>,
     x: i64,
     y: i64,
     color: Color,
@@ -526,7 +774,7 @@ fn write_strict(
 /// size-5 brush dragged along the border must not abort the whole stroke.
 fn write_lenient(
     doc: &mut Document,
-    selection: Option<SelectionRect>,
+    selection: Option<&Selection>,
     x: i64,
     y: i64,
     color: Color,
@@ -545,7 +793,7 @@ fn write_lenient(
 /// Computes every integer point on the line from `(x0, y0)` to `(x1, y1)`
 /// inclusive, using Bresenham's algorithm. Deterministic: always produces
 /// the same point sequence for the same inputs, on every platform.
-fn bresenham_points(x0: i64, y0: i64, x1: i64, y1: i64) -> Vec<(i64, i64)> {
+pub(crate) fn bresenham_points(x0: i64, y0: i64, x1: i64, y1: i64) -> Vec<(i64, i64)> {
     let mut points = Vec::new();
     let dx = (x1 - x0).abs();
     let dy = -(y1 - y0).abs();
@@ -570,6 +818,234 @@ fn bresenham_points(x0: i64, y0: i64, x1: i64, y1: i64) -> Vec<(i64, i64)> {
         }
     }
     points
+}
+
+
+/// Writes a pixel honouring only the canvas bounds, ignoring the selection.
+///
+/// Selection-aware writes are the norm, but the selection *transform*
+/// commands are the exception: they move the selected pixels, so their
+/// destination is by definition outside the old marquee. Clipping them to it
+/// would delete exactly the pixels the user asked to move.
+fn write_lenient_unmasked(doc: &mut Document, x: i64, y: i64, color: Color) {
+    if doc.in_bounds(x, y) {
+        let _ = doc.set_pixel(x, y, color);
+    }
+}
+
+/// Copies the selection's bounding box off the active layer.
+///
+/// Cells outside the mask come back as `None` so a later write can skip them
+/// and leave whatever is underneath intact — a rotated lasso selection must
+/// not stamp a rectangle of transparency over its neighbours.
+fn lift_block(doc: &Document, selection: &Selection) -> Vec<Option<Color>> {
+    let (ox, oy, w, h) = selection.bounds();
+    let mut block = vec![None; w as usize * h as usize];
+    for row in 0..h as i64 {
+        for col in 0..w as i64 {
+            let (x, y) = (ox + col, oy + row);
+            if selection.contains(x, y) && doc.in_bounds(x, y) {
+                block[(row * w as i64 + col) as usize] = doc.get_pixel(x, y).ok();
+            }
+        }
+    }
+    block
+}
+
+/// Clears every selected pixel on the active layer to transparency.
+fn clear_selection_pixels(doc: &mut Document, selection: &Selection) {
+    for (x, y) in selection.cells() {
+        if doc.in_bounds(x, y) {
+            let _ = doc.set_pixel(x, y, TRANSPARENT);
+        }
+    }
+}
+
+/// Whether two colours are within `tolerance` on every channel.
+///
+/// Per-channel maximum difference, not Euclidean distance: it is the metric
+/// a user can predict from a hex value, it needs no square root, and it is
+/// exact in integers.
+fn within_tolerance(a: Color, b: Color, tolerance: u8) -> bool {
+    a.iter().zip(b.iter()).all(|(x, y)| x.abs_diff(*y) <= tolerance)
+}
+
+/// The points of an axis-aligned ellipse inscribed in a bounding box.
+///
+/// Uses the midpoint (Bresenham) ellipse algorithm in integer arithmetic, so
+/// it is exact and identical on every platform. Even-sized boxes have no
+/// single centre pixel, which the doubled-coordinate form handles naturally.
+fn ellipse_points(x0: i64, y0: i64, x1: i64, y1: i64, fill: bool) -> Vec<(i64, i64)> {
+    let (left, right) = (x0.min(x1), x0.max(x1));
+    let (top, bottom) = (y0.min(y1), y0.max(y1));
+    let (w, h) = (right - left, bottom - top);
+    let mut out = Vec::new();
+
+    // Degenerate boxes are a line, which is what a user dragging a
+    // zero-height ellipse expects to see.
+    if w == 0 || h == 0 {
+        for y in top..=bottom {
+            for x in left..=right {
+                out.push((x, y));
+            }
+        }
+        return out;
+    }
+
+    let a = w as f64 / 2.0;
+    let b = h as f64 / 2.0;
+    let _ = (a, b); // documented below: no float is used in the loop
+
+    // Integer form: for each row, solve the ellipse equation for the half
+    // width using only integer multiplication, then emit the span. Scanning
+    // by row makes the filled and outlined cases share one traversal and
+    // guarantees a closed outline with no gaps, which the classic
+    // eight-way midpoint plot does not for very flat ellipses.
+    let (cx2, cy2) = (left + right, top + bottom); // doubled centre
+    let (rx, ry) = (w, h); // doubled radii
+    for y in top..=bottom {
+        let dy = 2 * y - cy2;
+        // (dx/rx)^2 + (dy/ry)^2 <= 1  ->  dx^2 * ry^2 <= (ry^2 - dy^2) * rx^2
+        let rem = (ry * ry) - (dy * dy);
+        if rem < 0 {
+            continue;
+        }
+        let max_dx2 = rem * rx * rx / (ry * ry);
+        let mut half = 0i64;
+        while (2 * half + if rx % 2 == 0 { 0 } else { 1 }).pow(2) <= max_dx2 {
+            half += 1;
+        }
+        let span = half.max(1) - 1;
+        let start = (cx2 / 2) - span;
+        let end = (cx2 - cx2 / 2) + span;
+        let (start, end) = (start.max(left), end.min(right));
+        if fill {
+            for x in start..=end {
+                out.push((x, y));
+            }
+        } else {
+            // Outline: the first and last row are solid caps, otherwise
+            // only the two edge pixels.
+            let is_cap = y == top || y == bottom;
+            if is_cap {
+                for x in start..=end {
+                    out.push((x, y));
+                }
+            } else {
+                out.push((start, y));
+                if end != start {
+                    out.push((end, y));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The vertices of a regular polygon, computed with an integer-friendly
+/// fixed-point cosine table so the result is bit-identical everywhere.
+fn regular_polygon(cx: i64, cy: i64, radius: u32, sides: u32, rotation: i64) -> Vec<(i64, i64)> {
+    if sides < 3 || radius == 0 {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(sides as usize);
+    for i in 0..sides {
+        // Angle in whole degrees keeps the input exact and the lookup
+        // deterministic; the table itself is fixed point.
+        let degrees = rotation + (360 * i as i64) / sides as i64;
+        let (sin, cos) = sin_cos_fixed(degrees);
+        let r = radius as i64;
+        out.push((cx + (r * cos) / FIXED_ONE, cy + (r * sin) / FIXED_ONE));
+    }
+    out
+}
+
+/// Scale of the fixed-point trigonometry used by [`regular_polygon`].
+const FIXED_ONE: i64 = 10_000;
+
+/// Sine and cosine of a whole number of degrees, in `FIXED_ONE` units.
+///
+/// A 91-entry quarter table plus quadrant reflection: no floating point at
+/// run time, so a polygon is bit-identical on every platform and every run,
+/// which `f64::sin` cannot promise across targets.
+fn sin_cos_fixed(degrees: i64) -> (i64, i64) {
+    /// sin(0..=90 degrees) * 10000.
+    static SIN_TABLE: [i64; 91] = [
+        0, 175, 349, 523, 698, 872, 1045, 1219, 1392, 1564, 1736, 1908, 2079, 2250, 2419, 2588,
+        2756, 2924, 3090, 3256, 3420, 3584, 3746, 3907, 4067, 4226, 4384, 4540, 4695, 4848, 5000,
+        5150, 5299, 5446, 5592, 5736, 5878, 6018, 6157, 6293, 6428, 6561, 6691, 6820, 6947, 7071,
+        7193, 7314, 7431, 7547, 7660, 7771, 7880, 7986, 8090, 8192, 8290, 8387, 8480, 8572, 8660,
+        8746, 8829, 8910, 8988, 9063, 9135, 9205, 9272, 9336, 9397, 9455, 9511, 9563, 9613, 9659,
+        9703, 9744, 9781, 9816, 9848, 9877, 9903, 9925, 9945, 9962, 9976, 9986, 9994, 9998, 10000,
+    ];
+    fn sin_of(d: i64) -> i64 {
+        let d = d.rem_euclid(360);
+        match d {
+            0..=90 => SIN_TABLE[d as usize],
+            91..=180 => SIN_TABLE[(180 - d) as usize],
+            181..=270 => -SIN_TABLE[(d - 180) as usize],
+            _ => -SIN_TABLE[(360 - d) as usize],
+        }
+    }
+    (sin_of(degrees), sin_of(degrees + 90))
+}
+
+/// Scan-converts a closed polygon, outlined or filled. Shares its rule with
+/// [`Selection::from_polygon`] so a lasso and a drawn polygon of the same
+/// points cover the same pixels.
+fn polygon_points(vertices: &[(i64, i64)], fill: bool) -> Vec<(i64, i64)> {
+    let mut out = Vec::new();
+    if fill {
+        let selection = Selection::from_polygon(vertices);
+        out.extend(selection.cells());
+    } else {
+        for i in 0..vertices.len() {
+            let (x0, y0) = vertices[i];
+            let (x1, y1) = vertices[(i + 1) % vertices.len()];
+            out.extend(bresenham_points(x0, y0, x1, y1));
+        }
+    }
+    out
+}
+
+/// The filled triangular head of an arrow pointing at `(x1, y1)`.
+fn arrow_head_points(x0: i64, y0: i64, x1: i64, y1: i64, head: u32) -> Vec<(i64, i64)> {
+    if head == 0 {
+        return Vec::new();
+    }
+    let (dx, dy) = (x1 - x0, y1 - y0);
+    if dx == 0 && dy == 0 {
+        return Vec::new();
+    }
+    // Integer approximation of the unit vector, scaled by FIXED_ONE. An
+    // integer square root keeps this deterministic.
+    let len = isqrt((dx * dx + dy * dy) as u64) as i64;
+    let len = len.max(1);
+    let (ux, uy) = (dx * FIXED_ONE / len, dy * FIXED_ONE / len);
+    let h = head as i64;
+    // Base of the head, h back along the shaft.
+    let bx = x1 - ux * h / FIXED_ONE;
+    let by = y1 - uy * h / FIXED_ONE;
+    // Perpendicular, half as wide as the head is long.
+    let (px, py) = (-uy, ux);
+    let half = h / 2;
+    let left = (bx + px * half / FIXED_ONE, by + py * half / FIXED_ONE);
+    let right = (bx - px * half / FIXED_ONE, by - py * half / FIXED_ONE);
+    polygon_points(&[(x1, y1), left, right], true)
+}
+
+/// Integer square root (Newton), so no float enters the geometry path.
+fn isqrt(n: u64) -> u64 {
+    if n < 2 {
+        return n;
+    }
+    let mut x = n;
+    let mut y = (x + 1) / 2;
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    x
 }
 
 #[cfg(test)]
@@ -883,7 +1359,7 @@ mod tests {
 
         e.begin_group();
         for x in 0..5 {
-            e.execute(Command::BrushStroke { x0: x, y0: 0, x1: x, y1: 0, size: 1, color: INK })
+            e.execute(Command::BrushStroke { x0: x, y0: 0, x1: x, y1: 0, size: 1, shape: BrushShape::Square, color: INK })
                 .unwrap();
         }
         e.end_group();
@@ -969,9 +1445,9 @@ mod tests {
     fn grouped_history_still_round_trips_through_the_parser() {
         let mut e = canvas(8);
         e.begin_group();
-        e.execute(Command::BrushStroke { x0: 0, y0: 0, x1: 4, y1: 4, size: 2, color: INK })
+        e.execute(Command::BrushStroke { x0: 0, y0: 0, x1: 4, y1: 4, size: 2, shape: BrushShape::Square, color: INK })
             .unwrap();
-        e.execute(Command::FillBucket { x: 7, y: 7, color: INK }).unwrap();
+        e.execute(Command::FillBucket { x: 7, y: 7, tolerance: 0, color: INK }).unwrap();
         e.end_group();
 
         let reparsed = parse_script(&e.save_script()).unwrap();
@@ -1005,7 +1481,7 @@ mod tests {
     #[test]
     fn brush_size_one_behaves_like_the_pencil() {
         let mut e = canvas(8);
-        e.execute(Command::BrushStroke { x0: 1, y0: 1, x1: 3, y1: 1, size: 1, color: INK })
+        e.execute(Command::BrushStroke { x0: 1, y0: 1, x1: 3, y1: 1, size: 1, shape: BrushShape::Square, color: INK })
             .unwrap();
         assert_eq!(painted(&e), vec![(1, 1), (2, 1), (3, 1)]);
     }
@@ -1013,7 +1489,7 @@ mod tests {
     #[test]
     fn brush_size_three_paints_a_three_by_three_block_per_point() {
         let mut e = canvas(8);
-        e.execute(Command::BrushStroke { x0: 4, y0: 4, x1: 4, y1: 4, size: 3, color: INK })
+        e.execute(Command::BrushStroke { x0: 4, y0: 4, x1: 4, y1: 4, size: 3, shape: BrushShape::Square, color: INK })
             .unwrap();
         let mut expected = Vec::new();
         for y in 3..=5 {
@@ -1028,7 +1504,7 @@ mod tests {
     fn a_wide_brush_at_the_canvas_edge_clips_instead_of_failing() {
         let mut e = canvas(4);
         // Centred on (0,0) with size 5, most of the footprint is off-canvas.
-        e.execute(Command::BrushStroke { x0: 0, y0: 0, x1: 0, y1: 0, size: 5, color: INK })
+        e.execute(Command::BrushStroke { x0: 0, y0: 0, x1: 0, y1: 0, size: 5, shape: BrushShape::Square, color: INK })
             .unwrap();
         assert_eq!(painted(&e), vec![(0, 0), (1, 0), (2, 0), (0, 1), (1, 1), (2, 1), (0, 2), (1, 2), (2, 2)]);
     }
@@ -1036,7 +1512,7 @@ mod tests {
     #[test]
     fn the_eraser_is_a_transparent_brush_stroke() {
         let mut e = canvas(4);
-        e.execute(Command::RectDraw { x0: 0, y0: 0, x1: 3, y1: 3, fill: true, color: INK })
+        e.execute(Command::RectDraw { x0: 0, y0: 0, x1: 3, y1: 3, radius: 0, fill: true, color: INK })
             .unwrap();
         assert_eq!(painted(&e).len(), 16);
 
@@ -1045,7 +1521,7 @@ mod tests {
             y0: 1,
             x1: 2,
             y1: 1,
-            size: 1,
+            size: 1, shape: BrushShape::Square,
             color: crate::document::TRANSPARENT,
         })
         .unwrap();
@@ -1057,7 +1533,7 @@ mod tests {
     #[test]
     fn outlined_rectangle_leaves_its_interior_empty() {
         let mut e = canvas(6);
-        e.execute(Command::RectDraw { x0: 1, y0: 1, x1: 4, y1: 4, fill: false, color: INK })
+        e.execute(Command::RectDraw { x0: 1, y0: 1, x1: 4, y1: 4, radius: 0, fill: false, color: INK })
             .unwrap();
         let doc = e.document().unwrap();
         assert_eq!(doc.get_pixel(1, 1).unwrap(), INK, "corner");
@@ -1071,11 +1547,11 @@ mod tests {
     fn filled_rectangle_differs_from_the_outline_by_exactly_its_interior() {
         let mut outline = canvas(6);
         outline
-            .execute(Command::RectDraw { x0: 1, y0: 1, x1: 4, y1: 4, fill: false, color: INK })
+            .execute(Command::RectDraw { x0: 1, y0: 1, x1: 4, y1: 4, radius: 0, fill: false, color: INK })
             .unwrap();
         let mut filled = canvas(6);
         filled
-            .execute(Command::RectDraw { x0: 1, y0: 1, x1: 4, y1: 4, fill: true, color: INK })
+            .execute(Command::RectDraw { x0: 1, y0: 1, x1: 4, y1: 4, radius: 0, fill: true, color: INK })
             .unwrap();
 
         let extra: Vec<_> = painted(&filled)
@@ -1088,10 +1564,10 @@ mod tests {
     #[test]
     fn rectangle_corners_may_be_given_in_any_order() {
         let mut a = canvas(6);
-        a.execute(Command::RectDraw { x0: 1, y0: 1, x1: 4, y1: 4, fill: true, color: INK })
+        a.execute(Command::RectDraw { x0: 1, y0: 1, x1: 4, y1: 4, radius: 0, fill: true, color: INK })
             .unwrap();
         let mut b = canvas(6);
-        b.execute(Command::RectDraw { x0: 4, y0: 4, x1: 1, y1: 1, fill: true, color: INK })
+        b.execute(Command::RectDraw { x0: 4, y0: 4, x1: 1, y1: 1, radius: 0, fill: true, color: INK })
             .unwrap();
         assert_eq!(a.document_hash(), b.document_hash());
     }
@@ -1100,10 +1576,10 @@ mod tests {
     fn flood_fill_stops_at_a_drawn_border() {
         let mut e = canvas(7);
         // A closed 5x5 box outline at (1,1)-(5,5); fill its interior.
-        e.execute(Command::RectDraw { x0: 1, y0: 1, x1: 5, y1: 5, fill: false, color: INK })
+        e.execute(Command::RectDraw { x0: 1, y0: 1, x1: 5, y1: 5, radius: 0, fill: false, color: INK })
             .unwrap();
         let paint = [0xff, 0x00, 0x00, 0xff];
-        e.execute(Command::FillBucket { x: 3, y: 3, color: paint }).unwrap();
+        e.execute(Command::FillBucket { x: 3, y: 3, tolerance: 0, color: paint }).unwrap();
 
         let doc = e.document().unwrap();
         for y in 2..=4 {
@@ -1121,26 +1597,26 @@ mod tests {
         // The degenerate case: if termination depended on "did the pixel
         // change", this would loop forever.
         let mut e = canvas(16);
-        e.execute(Command::FillBucket { x: 0, y: 0, color: [0, 0, 0, 0] }).unwrap();
+        e.execute(Command::FillBucket { x: 0, y: 0, tolerance: 0, color: [0, 0, 0, 0] }).unwrap();
         assert_eq!(painted(&e).len(), 0);
     }
 
     #[test]
     fn flood_fill_on_an_empty_canvas_fills_everything() {
         let mut e = canvas(4);
-        e.execute(Command::FillBucket { x: 2, y: 2, color: INK }).unwrap();
+        e.execute(Command::FillBucket { x: 2, y: 2, tolerance: 0, color: INK }).unwrap();
         assert_eq!(painted(&e).len(), 16);
     }
 
     #[test]
     fn flood_fill_acts_on_the_active_layer_only() {
         let mut e = canvas(4);
-        e.execute(Command::RectDraw { x0: 0, y0: 0, x1: 3, y1: 3, fill: true, color: INK })
+        e.execute(Command::RectDraw { x0: 0, y0: 0, x1: 3, y1: 3, radius: 0, fill: true, color: INK })
             .unwrap();
         e.execute(Command::LayerAdd { name: "top".to_string() }).unwrap();
         // The top layer is empty, so the fill covers all of it even though
         // the composite underneath is solid.
-        e.execute(Command::FillBucket { x: 0, y: 0, color: [1, 2, 3, 255] }).unwrap();
+        e.execute(Command::FillBucket { x: 0, y: 0, tolerance: 0, color: [1, 2, 3, 255] }).unwrap();
         let doc = e.document().unwrap();
         assert_eq!(doc.get_pixel_on(0, 0, 0).unwrap(), INK, "bottom layer untouched");
         assert_eq!(doc.get_pixel_on(1, 0, 0).unwrap(), [1, 2, 3, 255]);
@@ -1152,9 +1628,9 @@ mod tests {
         let mut e = canvas(8);
         e.execute(Command::SelectRect { x: 2, y: 2, width: 3, height: 3 }).unwrap();
 
-        e.execute(Command::BrushStroke { x0: 0, y0: 3, x1: 7, y1: 3, size: 3, color: INK })
+        e.execute(Command::BrushStroke { x0: 0, y0: 3, x1: 7, y1: 3, size: 3, shape: BrushShape::Square, color: INK })
             .unwrap();
-        e.execute(Command::FillBucket { x: 3, y: 3, color: [9, 9, 9, 255] }).unwrap();
+        e.execute(Command::FillBucket { x: 3, y: 3, tolerance: 0, color: [9, 9, 9, 255] }).unwrap();
 
         for (x, y) in painted(&e) {
             assert!(
@@ -1169,7 +1645,7 @@ mod tests {
     fn a_fill_cannot_leak_around_the_selection_boundary() {
         let mut e = canvas(8);
         e.execute(Command::SelectRect { x: 0, y: 0, width: 2, height: 8 }).unwrap();
-        e.execute(Command::FillBucket { x: 0, y: 0, color: INK }).unwrap();
+        e.execute(Command::FillBucket { x: 0, y: 0, tolerance: 0, color: INK }).unwrap();
         assert_eq!(painted(&e).len(), 16, "exactly the 2x8 selection");
     }
 

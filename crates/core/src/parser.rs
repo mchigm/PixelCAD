@@ -22,7 +22,8 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::command::{format_hex_color, parse_hex_color, sanitize_name, Command};
+use crate::command::{format_hex_color, parse_hex_color, sanitize_name, Axis, BrushShape, Command};
+use crate::font::{Font, TextAlign};
 
 /// An error produced while parsing a `.pxc` script.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,6 +131,41 @@ fn parse_bool(value: &str, key: &str, line_number: usize) -> Result<bool, ParseE
     }
 }
 
+/// Looks up an optional field, returning `default` when absent.
+///
+/// Optional fields are how Phase 1.5 extended existing commands without
+/// breaking a single existing script: `brush.stroke` gained `shape`,
+/// `rect.draw` gained `radius` and `fill.bucket` gained `tolerance`, and in
+/// every case the default reproduces the Phase 1 behaviour exactly.
+fn optional<'a>(fields: &HashMap<&str, &'a str>, key: &str) -> Option<&'a str> {
+    fields.get(key).copied()
+}
+
+/// Parses a `"x,y x,y ..."` point list. Separators may be spaces or
+/// semicolons, so a list stays readable whether or not it is quoted.
+fn parse_points(value: &str, line_number: usize) -> Result<Vec<(i64, i64)>, ParseError> {
+    let mut points = Vec::new();
+    for token in value.split([' ', ';']).filter(|t| !t.is_empty()) {
+        let (x, y) = token.split_once(',').ok_or_else(|| ParseError {
+            line_number,
+            message: format!("point {token:?} is not in x,y form"),
+        })?;
+        points.push((
+            parse_i64(x, "point x", line_number)?,
+            parse_i64(y, "point y", line_number)?,
+        ));
+    }
+    if points.is_empty() {
+        return Err(ParseError { line_number, message: "point list is empty".to_string() });
+    }
+    Ok(points)
+}
+
+/// Serialises a point list back to `"x,y x,y ..."`.
+fn format_points(points: &[(i64, i64)]) -> String {
+    points.iter().map(|(x, y)| format!("{x},{y}")).collect::<Vec<_>>().join(" ")
+}
+
 fn parse_color(value: &str, key: &str, line_number: usize) -> Result<[u8; 4], ParseError> {
     parse_hex_color(value).map_err(|e| ParseError {
         line_number,
@@ -217,6 +253,13 @@ pub fn parse_line(line: &str, line_number: usize) -> Result<Command, ParseError>
             x1: parse_i64(require(&fields, "x1", line_number)?, "x1", line_number)?,
             y1: parse_i64(require(&fields, "y1", line_number)?, "y1", line_number)?,
             size: parse_u32(require(&fields, "size", line_number)?, "size", line_number)?,
+            shape: match optional(&fields, "shape") {
+                None => BrushShape::default(),
+                Some(v) => BrushShape::parse(v).ok_or_else(|| ParseError {
+                    line_number,
+                    message: format!("shape {v:?} must be square or round"),
+                })?,
+            },
             color: parse_color(require(&fields, "color", line_number)?, "color", line_number)?,
         }),
         "rect.draw" => Ok(Command::RectDraw {
@@ -224,6 +267,10 @@ pub fn parse_line(line: &str, line_number: usize) -> Result<Command, ParseError>
             y0: parse_i64(require(&fields, "y0", line_number)?, "y0", line_number)?,
             x1: parse_i64(require(&fields, "x1", line_number)?, "x1", line_number)?,
             y1: parse_i64(require(&fields, "y1", line_number)?, "y1", line_number)?,
+            radius: match optional(&fields, "radius") {
+                None => 0,
+                Some(v) => parse_u32(v, "radius", line_number)?,
+            },
             fill: parse_bool(require(&fields, "fill", line_number)?, "fill", line_number)?,
             color: parse_color(require(&fields, "color", line_number)?, "color", line_number)?,
         }),
@@ -237,7 +284,111 @@ pub fn parse_line(line: &str, line_number: usize) -> Result<Command, ParseError>
         "fill.bucket" => Ok(Command::FillBucket {
             x: parse_i64(require(&fields, "x", line_number)?, "x", line_number)?,
             y: parse_i64(require(&fields, "y", line_number)?, "y", line_number)?,
+            tolerance: match optional(&fields, "tolerance") {
+                None => 0,
+                Some(v) => parse_u8(v, "tolerance", line_number)?,
+            },
             color: parse_color(require(&fields, "color", line_number)?, "color", line_number)?,
+        }),
+        "ellipse.draw" => Ok(Command::EllipseDraw {
+            x0: parse_i64(require(&fields, "x0", line_number)?, "x0", line_number)?,
+            y0: parse_i64(require(&fields, "y0", line_number)?, "y0", line_number)?,
+            x1: parse_i64(require(&fields, "x1", line_number)?, "x1", line_number)?,
+            y1: parse_i64(require(&fields, "y1", line_number)?, "y1", line_number)?,
+            fill: parse_bool(require(&fields, "fill", line_number)?, "fill", line_number)?,
+            color: parse_color(require(&fields, "color", line_number)?, "color", line_number)?,
+        }),
+        "polygon.draw" => Ok(Command::PolygonDraw {
+            x: parse_i64(require(&fields, "x", line_number)?, "x", line_number)?,
+            y: parse_i64(require(&fields, "y", line_number)?, "y", line_number)?,
+            radius: parse_u32(require(&fields, "radius", line_number)?, "radius", line_number)?,
+            sides: parse_u32(require(&fields, "sides", line_number)?, "sides", line_number)?,
+            rotation: match optional(&fields, "rotation") {
+                None => 0,
+                Some(v) => parse_i64(v, "rotation", line_number)?,
+            },
+            fill: parse_bool(require(&fields, "fill", line_number)?, "fill", line_number)?,
+            color: parse_color(require(&fields, "color", line_number)?, "color", line_number)?,
+        }),
+        "arrow.draw" => Ok(Command::ArrowDraw {
+            x0: parse_i64(require(&fields, "x0", line_number)?, "x0", line_number)?,
+            y0: parse_i64(require(&fields, "y0", line_number)?, "y0", line_number)?,
+            x1: parse_i64(require(&fields, "x1", line_number)?, "x1", line_number)?,
+            y1: parse_i64(require(&fields, "y1", line_number)?, "y1", line_number)?,
+            head: match optional(&fields, "head") {
+                None => 5,
+                Some(v) => parse_u32(v, "head", line_number)?,
+            },
+            color: parse_color(require(&fields, "color", line_number)?, "color", line_number)?,
+        }),
+        "polyline.draw" => Ok(Command::PolylineDraw {
+            points: parse_points(require(&fields, "points", line_number)?, line_number)?,
+            color: parse_color(require(&fields, "color", line_number)?, "color", line_number)?,
+        }),
+        "text.draw" => Ok(Command::TextDraw {
+            x: parse_i64(require(&fields, "x", line_number)?, "x", line_number)?,
+            y: parse_i64(require(&fields, "y", line_number)?, "y", line_number)?,
+            text: sanitize_name(require(&fields, "text", line_number)?),
+            font: match optional(&fields, "font") {
+                None => Font::Small,
+                Some(v) => Font::from_name(v).ok_or_else(|| ParseError {
+                    line_number,
+                    message: format!("font {v:?} must be small or bold"),
+                })?,
+            },
+            scale: match optional(&fields, "scale") {
+                None => 1,
+                Some(v) => parse_u32(v, "scale", line_number)?,
+            },
+            align: match optional(&fields, "align") {
+                None => TextAlign::Left,
+                Some(v) => TextAlign::from_name(v).ok_or_else(|| ParseError {
+                    line_number,
+                    message: format!("align {v:?} must be left, center or right"),
+                })?,
+            },
+            color: parse_color(require(&fields, "color", line_number)?, "color", line_number)?,
+        }),
+        "select.all" => Ok(Command::SelectAll),
+        "select.lasso" => Ok(Command::SelectLasso {
+            points: parse_points(require(&fields, "points", line_number)?, line_number)?,
+        }),
+        "selection.delete" => Ok(Command::SelectionDelete),
+        "selection.move" => Ok(Command::SelectionMove {
+            dx: parse_i64(require(&fields, "dx", line_number)?, "dx", line_number)?,
+            dy: parse_i64(require(&fields, "dy", line_number)?, "dy", line_number)?,
+        }),
+        "selection.flip" => Ok(Command::SelectionFlip {
+            axis: {
+                let v = require(&fields, "axis", line_number)?;
+                Axis::parse(v).ok_or_else(|| ParseError {
+                    line_number,
+                    message: format!("axis {v:?} must be horizontal or vertical"),
+                })?
+            },
+        }),
+        "selection.rotate" => Ok(Command::SelectionRotate {
+            degrees: parse_u32(require(&fields, "degrees", line_number)?, "degrees", line_number)?,
+        }),
+        "selection.scale" => Ok(Command::SelectionScale {
+            width: parse_u32(require(&fields, "width", line_number)?, "width", line_number)?,
+            height: parse_u32(require(&fields, "height", line_number)?, "height", line_number)?,
+        }),
+        "canvas.crop" => Ok(Command::CanvasCrop {
+            x: parse_i64(require(&fields, "x", line_number)?, "x", line_number)?,
+            y: parse_i64(require(&fields, "y", line_number)?, "y", line_number)?,
+            width: parse_u32(require(&fields, "width", line_number)?, "width", line_number)?,
+            height: parse_u32(require(&fields, "height", line_number)?, "height", line_number)?,
+        }),
+        "canvas.resize" => Ok(Command::CanvasResize {
+            width: parse_u32(require(&fields, "width", line_number)?, "width", line_number)?,
+            height: parse_u32(require(&fields, "height", line_number)?, "height", line_number)?,
+        }),
+        "layer.duplicate" => Ok(Command::LayerDuplicate {
+            index: parse_usize(require(&fields, "index", line_number)?, "index", line_number)?,
+        }),
+        "layer.merge" => Ok(Command::LayerMerge {
+            index: parse_usize(require(&fields, "index", line_number)?, "index", line_number)?,
         }),
         other => Err(ParseError {
             line_number,
@@ -304,17 +455,35 @@ pub fn serialize_command(command: &Command) -> String {
             format!("select.rect x={} y={} width={} height={}", x, y, width, height)
         }
         Command::SelectClear => "select.clear".to_string(),
-        Command::BrushStroke { x0, y0, x1, y1, size, color } => format!(
-            "brush.stroke x0={} y0={} x1={} y1={} size={} color=\"{}\"",
+        Command::BrushStroke { x0, y0, x1, y1, size, shape, color } => format!(
+            "brush.stroke x0={} y0={} x1={} y1={} size={} shape={} color=\"{}\"",
             x0,
             y0,
             x1,
             y1,
             size,
+            shape.name(),
             format_hex_color(*color)
         ),
-        Command::RectDraw { x0, y0, x1, y1, fill, color } => format!(
-            "rect.draw x0={} y0={} x1={} y1={} fill={} color=\"{}\"",
+        Command::RectDraw { x0, y0, x1, y1, radius, fill, color } => format!(
+            "rect.draw x0={} y0={} x1={} y1={} radius={} fill={} color=\"{}\"",
+            x0,
+            y0,
+            x1,
+            y1,
+            radius,
+            fill,
+            format_hex_color(*color)
+        ),
+        Command::FillBucket { x, y, tolerance, color } => format!(
+            "fill.bucket x={} y={} tolerance={} color=\"{}\"",
+            x,
+            y,
+            tolerance,
+            format_hex_color(*color)
+        ),
+        Command::EllipseDraw { x0, y0, x1, y1, fill, color } => format!(
+            "ellipse.draw x0={} y0={} x1={} y1={} fill={} color=\"{}\"",
             x0,
             y0,
             x1,
@@ -322,9 +491,59 @@ pub fn serialize_command(command: &Command) -> String {
             fill,
             format_hex_color(*color)
         ),
-        Command::FillBucket { x, y, color } => {
-            format!("fill.bucket x={} y={} color=\"{}\"", x, y, format_hex_color(*color))
+        Command::PolygonDraw { x, y, radius, sides, rotation, fill, color } => format!(
+            "polygon.draw x={} y={} radius={} sides={} rotation={} fill={} color=\"{}\"",
+            x,
+            y,
+            radius,
+            sides,
+            rotation,
+            fill,
+            format_hex_color(*color)
+        ),
+        Command::ArrowDraw { x0, y0, x1, y1, head, color } => format!(
+            "arrow.draw x0={} y0={} x1={} y1={} head={} color=\"{}\"",
+            x0,
+            y0,
+            x1,
+            y1,
+            head,
+            format_hex_color(*color)
+        ),
+        Command::PolylineDraw { points, color } => format!(
+            "polyline.draw points=\"{}\" color=\"{}\"",
+            format_points(points),
+            format_hex_color(*color)
+        ),
+        Command::TextDraw { x, y, text, font, scale, align, color } => format!(
+            "text.draw x={} y={} text=\"{}\" font={} scale={} align={} color=\"{}\"",
+            x,
+            y,
+            sanitize_name(text),
+            font.name(),
+            scale,
+            align.name(),
+            format_hex_color(*color)
+        ),
+        Command::SelectAll => "select.all".to_string(),
+        Command::SelectLasso { points } => {
+            format!("select.lasso points=\"{}\"", format_points(points))
         }
+        Command::SelectionDelete => "selection.delete".to_string(),
+        Command::SelectionMove { dx, dy } => format!("selection.move dx={dx} dy={dy}"),
+        Command::SelectionFlip { axis } => format!("selection.flip axis={}", axis.name()),
+        Command::SelectionRotate { degrees } => format!("selection.rotate degrees={degrees}"),
+        Command::SelectionScale { width, height } => {
+            format!("selection.scale width={width} height={height}")
+        }
+        Command::CanvasCrop { x, y, width, height } => {
+            format!("canvas.crop x={x} y={y} width={width} height={height}")
+        }
+        Command::CanvasResize { width, height } => {
+            format!("canvas.resize width={width} height={height}")
+        }
+        Command::LayerDuplicate { index } => format!("layer.duplicate index={index}"),
+        Command::LayerMerge { index } => format!("layer.merge index={index}"),
         Command::ImageImport { x, y, width, height, data } => format!(
             "image.import x={} y={} width={} height={} data=\"{}\"",
             x, y, width, height, data
@@ -370,10 +589,80 @@ mod tests {
             Command::ColorPick { x: 9, y: 11 },
             Command::SelectRect { x: 2, y: 3, width: 10, height: 12 },
             Command::SelectClear,
-            Command::BrushStroke { x0: 1, y0: 2, x1: 3, y1: 4, size: 5, color: [1, 2, 3, 4] },
-            Command::RectDraw { x0: 1, y0: 2, x1: 30, y1: 4, fill: true, color: [9, 8, 7, 255] },
-            Command::RectDraw { x0: 0, y0: 0, x1: 1, y1: 1, fill: false, color: [0, 0, 0, 255] },
-            Command::FillBucket { x: 6, y: 7, color: [0x20, 0x30, 0x40, 0xff] },
+            Command::BrushStroke {
+                x0: 1,
+                y0: 2,
+                x1: 3,
+                y1: 4,
+                size: 5,
+                shape: BrushShape::Square,
+                color: [1, 2, 3, 4],
+            },
+            Command::BrushStroke {
+                x0: 0,
+                y0: 0,
+                x1: 1,
+                y1: 1,
+                size: 3,
+                shape: BrushShape::Round,
+                color: [1, 2, 3, 4],
+            },
+            Command::RectDraw {
+                x0: 1,
+                y0: 2,
+                x1: 30,
+                y1: 4,
+                radius: 0,
+                fill: true,
+                color: [9, 8, 7, 255],
+            },
+            Command::RectDraw {
+                x0: 0,
+                y0: 0,
+                x1: 1,
+                y1: 1,
+                radius: 3,
+                fill: false,
+                color: [0, 0, 0, 255],
+            },
+            Command::FillBucket { x: 6, y: 7, tolerance: 0, color: [0x20, 0x30, 0x40, 0xff] },
+            Command::FillBucket { x: 6, y: 7, tolerance: 40, color: [0x20, 0x30, 0x40, 0xff] },
+            Command::EllipseDraw { x0: 0, y0: 0, x1: 9, y1: 5, fill: true, color: [1, 1, 1, 255] },
+            Command::PolygonDraw {
+                x: 10,
+                y: 10,
+                radius: 6,
+                sides: 5,
+                rotation: 30,
+                fill: false,
+                color: [2, 2, 2, 255],
+            },
+            Command::ArrowDraw { x0: 0, y0: 0, x1: 20, y1: 8, head: 5, color: [3, 3, 3, 255] },
+            Command::PolylineDraw {
+                points: vec![(0, 0), (3, 4), (9, 2)],
+                color: [4, 4, 4, 255],
+            },
+            Command::TextDraw {
+                x: 2,
+                y: 3,
+                text: "HELLO 42".to_string(),
+                font: Font::Bold,
+                scale: 2,
+                align: TextAlign::Center,
+                color: [5, 5, 5, 255],
+            },
+            Command::SelectAll,
+            Command::SelectLasso { points: vec![(0, 0), (4, 0), (0, 4)] },
+            Command::SelectionDelete,
+            Command::SelectionMove { dx: -3, dy: 7 },
+            Command::SelectionFlip { axis: Axis::Horizontal },
+            Command::SelectionFlip { axis: Axis::Vertical },
+            Command::SelectionRotate { degrees: 90 },
+            Command::SelectionScale { width: 12, height: 8 },
+            Command::CanvasCrop { x: 1, y: 2, width: 30, height: 40 },
+            Command::CanvasResize { width: 64, height: 48 },
+            Command::LayerDuplicate { index: 1 },
+            Command::LayerMerge { index: 2 },
             Command::ImageImport {
                 x: 1,
                 y: 2,
@@ -412,10 +701,26 @@ mod tests {
             Command::RectDraw { .. } => 16,
             Command::FillBucket { .. } => 17,
             Command::ImageImport { .. } => 18,
+            Command::EllipseDraw { .. } => 19,
+            Command::PolygonDraw { .. } => 20,
+            Command::ArrowDraw { .. } => 21,
+            Command::PolylineDraw { .. } => 22,
+            Command::TextDraw { .. } => 23,
+            Command::SelectAll => 24,
+            Command::SelectLasso { .. } => 25,
+            Command::SelectionDelete => 26,
+            Command::SelectionMove { .. } => 27,
+            Command::SelectionFlip { .. } => 28,
+            Command::SelectionRotate { .. } => 29,
+            Command::SelectionScale { .. } => 30,
+            Command::CanvasCrop { .. } => 31,
+            Command::CanvasResize { .. } => 32,
+            Command::LayerDuplicate { .. } => 33,
+            Command::LayerMerge { .. } => 34,
         }
     }
 
-    const VARIANT_COUNT: usize = 19;
+    const VARIANT_COUNT: usize = 35;
 
     #[test]
     fn every_command_variant_is_covered_by_the_round_trip_test() {

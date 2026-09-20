@@ -887,7 +887,7 @@ mod gui_tests {
                     y0: 0,
                     x1: 0,
                     y1: 0,
-                    size: 1,
+                    size: 1, shape: pixelcad_core::BrushShape::Square,
                     color
                 },
             ]

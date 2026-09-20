@@ -61,22 +61,26 @@ pub enum Command {
 
     // ----------------------------------------------------- drawing (P1)
     /// `brush.stroke x0=<i64> y0=<i64> x1=<i64> y1=<i64> size=<u32>
-    /// color=<hex>` — sweep a square brush of side `size` along the line
-    /// from `(x0, y0)` to `(x1, y1)`.
+    /// shape=<square|round> color=<hex>` — sweep a brush of side `size`
+    /// along the line from `(x0, y0)` to `(x1, y1)`.
+    ///
+    /// `shape` is optional and defaults to [`BrushShape::Square`], which is
+    /// exactly the Phase 1 behaviour — that default is what keeps existing
+    /// scripts rendering byte-identically.
     ///
     /// **The eraser is this command with `color="#00000000"`.** Pixel writes
     /// replace rather than blend, so painting fully transparent *is*
     /// erasing; a separate `eraser.*` command would be the same code with a
     /// different name.
-    BrushStroke { x0: i64, y0: i64, x1: i64, y1: i64, size: u32, color: Color },
+    BrushStroke { x0: i64, y0: i64, x1: i64, y1: i64, size: u32, shape: BrushShape, color: Color },
     /// `rect.draw x0=<i64> y0=<i64> x1=<i64> y1=<i64> fill=<bool>
     /// color=<hex>` — an axis-aligned rectangle, outlined or filled.
     /// Corners may be given in any order.
-    RectDraw { x0: i64, y0: i64, x1: i64, y1: i64, fill: bool, color: Color },
+    RectDraw { x0: i64, y0: i64, x1: i64, y1: i64, radius: u32, fill: bool, color: Color },
     /// `fill.bucket x=<i64> y=<i64> color=<hex>` — 4-connected flood fill on
     /// the active layer, replacing the contiguous region that exactly
     /// matches the starting pixel's RGBA.
-    FillBucket { x: i64, y: i64, color: Color },
+    FillBucket { x: i64, y: i64, tolerance: u8, color: Color },
 
     /// `image.import x=<i64> y=<i64> width=<u32> height=<u32> data="<b64>"`
     /// — stamp a block of raw RGBA8 pixels onto the active layer with its
@@ -87,6 +91,130 @@ pub enum Command {
     /// Carrying the pixels inline is what keeps a project file a single
     /// self-contained, replayable artefact with no sidecar files.
     ImageImport { x: i64, y: i64, width: u32, height: u32, data: String },
+
+    // ------------------------------------------------- shapes & text (P1.5)
+    /// `ellipse.draw x0 y0 x1 y1 fill=<bool> color=<hex>` — an ellipse
+    /// inscribed in the given bounding box, outlined or filled.
+    EllipseDraw { x0: i64, y0: i64, x1: i64, y1: i64, fill: bool, color: Color },
+    /// `polygon.draw x y radius=<u32> sides=<u32> rotation=<i64> fill=<bool>
+    /// color=<hex>` — a regular polygon centred on `(x, y)`. `rotation` is
+    /// in degrees, so the shape can be oriented without floating-point
+    /// input in the script.
+    PolygonDraw {
+        x: i64,
+        y: i64,
+        radius: u32,
+        sides: u32,
+        rotation: i64,
+        fill: bool,
+        color: Color,
+    },
+    /// `arrow.draw x0 y0 x1 y1 head=<u32> color=<hex>` — a line from
+    /// `(x0, y0)` to `(x1, y1)` with a filled arrowhead of the given length
+    /// at the far end.
+    ArrowDraw { x0: i64, y0: i64, x1: i64, y1: i64, head: u32, color: Color },
+    /// `polyline.draw points="x,y x,y ..." color=<hex>` — connected line
+    /// segments through every point in order.
+    PolylineDraw { points: Vec<(i64, i64)>, color: Color },
+    /// `text.draw x y text="..." font=<small|bold> scale=<u32>
+    /// align=<left|center|right> color=<hex>` — stamps bitmap text using the
+    /// built-in 5x7 typeface.
+    TextDraw {
+        x: i64,
+        y: i64,
+        text: String,
+        font: crate::font::Font,
+        scale: u32,
+        align: crate::font::TextAlign,
+        color: Color,
+    },
+
+    // ------------------------------------------------- selection ops (P1.5)
+    /// `select.all` — select the whole canvas.
+    SelectAll,
+    /// `select.lasso points="x,y x,y ..."` — select the closed polygon
+    /// through these points, boundary included.
+    SelectLasso { points: Vec<(i64, i64)> },
+    /// `selection.delete` — clear every selected pixel on the active layer
+    /// to transparency.
+    SelectionDelete,
+    /// `selection.move dx=<i64> dy=<i64>` — move the selected *pixels* (not
+    /// just the marquee), leaving transparency behind.
+    SelectionMove { dx: i64, dy: i64 },
+    /// `selection.flip axis=<horizontal|vertical>` — mirror the selected
+    /// pixels within the selection's bounding box.
+    SelectionFlip { axis: Axis },
+    /// `selection.rotate degrees=<90|180|270>` — rotate the selected pixels
+    /// about the centre of their bounding box.
+    SelectionRotate { degrees: u32 },
+    /// `selection.scale width=<u32> height=<u32>` — nearest-neighbour
+    /// resample of the selected pixels into a new size, anchored at the
+    /// selection's top-left corner.
+    SelectionScale { width: u32, height: u32 },
+
+    // --------------------------------------------------- canvas/layer (P1.5)
+    /// `canvas.crop x y width height` — crop every layer to a window.
+    CanvasCrop { x: i64, y: i64, width: u32, height: u32 },
+    /// `canvas.resize width height` — nearest-neighbour resample of every
+    /// layer.
+    CanvasResize { width: u32, height: u32 },
+    /// `layer.duplicate index=<usize>` — insert an independent copy above.
+    LayerDuplicate { index: usize },
+    /// `layer.merge index=<usize>` — composite a layer down into the one
+    /// below it and remove it.
+    LayerMerge { index: usize },
+}
+
+/// The footprint a brush stamps at each point along its path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BrushShape {
+    /// A `size x size` block. The Phase 1 behaviour and still the default.
+    #[default]
+    Square,
+    /// A filled disc of diameter `size`, tested with integer arithmetic so
+    /// it is bit-identical everywhere.
+    Round,
+}
+
+impl BrushShape {
+    pub fn name(self) -> &'static str {
+        match self {
+            BrushShape::Square => "square",
+            BrushShape::Round => "round",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "square" => Some(BrushShape::Square),
+            "round" => Some(BrushShape::Round),
+            _ => None,
+        }
+    }
+}
+
+/// A mirror axis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Axis {
+    Horizontal,
+    Vertical,
+}
+
+impl Axis {
+    pub fn name(self) -> &'static str {
+        match self {
+            Axis::Horizontal => "horizontal",
+            Axis::Vertical => "vertical",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "horizontal" | "h" => Some(Axis::Horizontal),
+            "vertical" | "v" => Some(Axis::Vertical),
+            _ => None,
+        }
+    }
 }
 
 impl Command {
@@ -113,6 +241,22 @@ impl Command {
             Command::RectDraw { .. } => "rect.draw",
             Command::FillBucket { .. } => "fill.bucket",
             Command::ImageImport { .. } => "image.import",
+            Command::EllipseDraw { .. } => "ellipse.draw",
+            Command::PolygonDraw { .. } => "polygon.draw",
+            Command::ArrowDraw { .. } => "arrow.draw",
+            Command::PolylineDraw { .. } => "polyline.draw",
+            Command::TextDraw { .. } => "text.draw",
+            Command::SelectAll => "select.all",
+            Command::SelectLasso { .. } => "select.lasso",
+            Command::SelectionDelete => "selection.delete",
+            Command::SelectionMove { .. } => "selection.move",
+            Command::SelectionFlip { .. } => "selection.flip",
+            Command::SelectionRotate { .. } => "selection.rotate",
+            Command::SelectionScale { .. } => "selection.scale",
+            Command::CanvasCrop { .. } => "canvas.crop",
+            Command::CanvasResize { .. } => "canvas.resize",
+            Command::LayerDuplicate { .. } => "layer.duplicate",
+            Command::LayerMerge { .. } => "layer.merge",
         }
     }
 }

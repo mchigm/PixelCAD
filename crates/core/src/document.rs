@@ -90,6 +90,8 @@ pub enum DocumentError {
     NoSuchLayer { index: usize, count: usize },
     #[error("cannot remove the last remaining layer")]
     LastLayer,
+    #[error("layer 0 is the bottom layer; there is nothing below it to merge into")]
+    NoLayerBelow,
 }
 
 impl Document {
@@ -206,6 +208,115 @@ impl Document {
             }
             self.active = a;
         }
+        Ok(())
+    }
+
+    /// Inserts an independent copy of layer `index` directly above it, and
+    /// makes the copy active.
+    pub fn duplicate_layer(&mut self, index: usize) -> Result<usize, DocumentError> {
+        self.check_layer(index)?;
+        let mut copy = self.layers[index].clone();
+        copy.name = format!("{} copy", copy.name);
+        let at = index + 1;
+        self.layers.insert(at, copy);
+        self.active = at;
+        Ok(at)
+    }
+
+    /// Composites layer `index` down onto `index - 1` and removes it.
+    ///
+    /// The merged layer keeps the *lower* layer's name, visibility and
+    /// opacity, and the pixels it ends up holding are the two layers'
+    /// existing combined result. Merging must never change what is on
+    /// screen, only how many layers produced it. An invisible or
+    /// zero-opacity upper layer therefore contributes nothing at all, which
+    /// is what makes "merge down" safe to press.
+    pub fn merge_layer_down(&mut self, index: usize) -> Result<(), DocumentError> {
+        self.check_layer(index)?;
+        if index == 0 {
+            return Err(DocumentError::NoLayerBelow);
+        }
+
+        let upper = self.layers[index].clone();
+        if upper.contributes() {
+            let lower = &mut self.layers[index - 1];
+            for i in (0..lower.pixels.len()).step_by(4) {
+                let src_a = scale_u8(upper.pixels[i + 3], upper.opacity);
+                if src_a == 0 {
+                    continue;
+                }
+                let src =
+                    [upper.pixels[i], upper.pixels[i + 1], upper.pixels[i + 2], src_a];
+                let dst =
+                    [lower.pixels[i], lower.pixels[i + 1], lower.pixels[i + 2], lower.pixels[i + 3]];
+                let blended = over(src, dst);
+                lower.pixels[i..i + 4].copy_from_slice(&blended);
+            }
+        }
+
+        self.layers.remove(index);
+        if self.active >= self.layers.len() {
+            self.active = self.layers.len() - 1;
+        }
+        Ok(())
+    }
+
+    /// Crops every layer to `(x, y, width, height)`, in document
+    /// coordinates. Regions outside the old canvas become transparent, so a
+    /// crop that extends past an edge is a legal "grow" rather than an
+    /// error.
+    pub fn crop(&mut self, x: i64, y: i64, width: u32, height: u32) -> Result<(), DocumentError> {
+        if width == 0 || height == 0 {
+            return Err(DocumentError::ZeroSize { width, height });
+        }
+        for layer in &mut self.layers {
+            let mut out = vec![0u8; width as usize * height as usize * 4];
+            for row in 0..height as i64 {
+                for col in 0..width as i64 {
+                    let (sx, sy) = (x + col, y + row);
+                    if sx < 0 || sy < 0 || sx >= self.width as i64 || sy >= self.height as i64 {
+                        continue;
+                    }
+                    let si = (sy as usize * self.width as usize + sx as usize) * 4;
+                    let di = (row as usize * width as usize + col as usize) * 4;
+                    out[di..di + 4].copy_from_slice(&layer.pixels[si..si + 4]);
+                }
+            }
+            layer.pixels = out;
+        }
+        self.width = width;
+        self.height = height;
+        Ok(())
+    }
+
+    /// Resamples every layer to `width x height` with nearest-neighbour
+    /// sampling.
+    ///
+    /// Nearest-neighbour is not a limitation here, it is the requirement:
+    /// any smooth filter invents colours that were never in the palette and
+    /// blurs the hard pixel edges the whole editor exists to preserve. The
+    /// source index uses integer arithmetic (`dst * src / dst_size`) so the
+    /// mapping is exact and identical on every platform.
+    pub fn resize(&mut self, width: u32, height: u32) -> Result<(), DocumentError> {
+        if width == 0 || height == 0 {
+            return Err(DocumentError::ZeroSize { width, height });
+        }
+        let (sw, sh) = (self.width as usize, self.height as usize);
+        for layer in &mut self.layers {
+            let mut out = vec![0u8; width as usize * height as usize * 4];
+            for row in 0..height as usize {
+                let sy = row * sh / height as usize;
+                for col in 0..width as usize {
+                    let sx = col * sw / width as usize;
+                    let si = (sy * sw + sx) * 4;
+                    let di = (row * width as usize + col) * 4;
+                    out[di..di + 4].copy_from_slice(&layer.pixels[si..si + 4]);
+                }
+            }
+            layer.pixels = out;
+        }
+        self.width = width;
+        self.height = height;
         Ok(())
     }
 
@@ -621,5 +732,162 @@ mod tests {
             let src = [37, 111, 200, a];
             assert_eq!(over(src, TRANSPARENT), src);
         }
+    }
+}
+
+#[cfg(test)]
+mod phase_1_5_tests {
+    use super::*;
+
+    fn painted_on(doc: &Document, layer: usize) -> Vec<(i64, i64)> {
+        let mut out = Vec::new();
+        for y in 0..doc.height() as i64 {
+            for x in 0..doc.width() as i64 {
+                if doc.get_pixel_on(layer, x, y).unwrap()[3] != 0 {
+                    out.push((x, y));
+                }
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn duplicate_layer_produces_an_independent_copy() {
+        let mut doc = Document::new(4, 4).unwrap();
+        doc.set_pixel(1, 1, [1, 2, 3, 255]).unwrap();
+
+        let at = doc.duplicate_layer(0).unwrap();
+        assert_eq!(at, 1);
+        assert_eq!(doc.layer_count(), 2);
+        assert_eq!(doc.active_layer_index(), 1);
+        assert_eq!(doc.layers()[1].name(), "Layer 1 copy");
+        assert_eq!(doc.get_pixel_on(1, 1, 1).unwrap(), [1, 2, 3, 255]);
+
+        // Independent: editing the copy must not touch the original.
+        doc.set_pixel(1, 1, [9, 9, 9, 255]).unwrap();
+        assert_eq!(doc.get_pixel_on(0, 1, 1).unwrap(), [1, 2, 3, 255]);
+    }
+
+    #[test]
+    fn merge_down_does_not_change_the_visible_result() {
+        let mut doc = Document::new(3, 1).unwrap();
+        doc.set_pixel(0, 0, [255, 0, 0, 255]).unwrap();
+        doc.set_pixel(1, 0, [255, 0, 0, 255]).unwrap();
+        doc.add_layer("top");
+        doc.set_pixel(1, 0, [0, 0, 255, 255]).unwrap();
+        doc.set_pixel(2, 0, [0, 255, 0, 255]).unwrap();
+
+        let before = doc.composite();
+        doc.merge_layer_down(1).unwrap();
+        assert_eq!(doc.layer_count(), 1);
+        assert_eq!(doc.composite(), before, "merging must be visually invisible");
+    }
+
+    #[test]
+    fn merge_down_honours_the_upper_layers_opacity_and_visibility() {
+        let mut doc = Document::new(1, 1).unwrap();
+        doc.set_pixel(0, 0, [255, 0, 0, 255]).unwrap();
+        doc.add_layer("top");
+        doc.set_pixel(0, 0, [0, 0, 255, 255]).unwrap();
+        doc.set_layer_visible(1, false).unwrap();
+
+        let before = doc.composite();
+        doc.merge_layer_down(1).unwrap();
+        assert_eq!(doc.composite(), before);
+        assert_eq!(
+            doc.get_pixel_on(0, 0, 0).unwrap(),
+            [255, 0, 0, 255],
+            "a hidden layer must contribute nothing when merged"
+        );
+    }
+
+    #[test]
+    fn merging_the_bottom_layer_is_refused() {
+        let mut doc = Document::new(2, 2).unwrap();
+        assert_eq!(doc.merge_layer_down(0), Err(DocumentError::NoLayerBelow));
+    }
+
+    #[test]
+    fn crop_keeps_the_requested_window_on_every_layer() {
+        let mut doc = Document::new(8, 8).unwrap();
+        doc.set_pixel(2, 2, [1, 1, 1, 255]).unwrap();
+        doc.set_pixel(7, 7, [2, 2, 2, 255]).unwrap();
+        doc.add_layer("second");
+        doc.set_pixel(3, 3, [3, 3, 3, 255]).unwrap();
+
+        doc.crop(2, 2, 4, 4).unwrap();
+        assert_eq!((doc.width(), doc.height()), (4, 4));
+        assert_eq!(doc.get_pixel_on(0, 0, 0).unwrap(), [1, 1, 1, 255], "(2,2) is now (0,0)");
+        assert_eq!(painted_on(&doc, 0), vec![(0, 0)], "(7,7) was cropped away");
+        assert_eq!(painted_on(&doc, 1), vec![(1, 1)], "every layer is cropped alike");
+    }
+
+    #[test]
+    fn cropping_outside_the_canvas_grows_with_transparency() {
+        let mut doc = Document::new(2, 2).unwrap();
+        doc.set_pixel(0, 0, [5, 5, 5, 255]).unwrap();
+        doc.crop(-1, -1, 4, 4).unwrap();
+        assert_eq!((doc.width(), doc.height()), (4, 4));
+        assert_eq!(doc.get_pixel(1, 1).unwrap(), [5, 5, 5, 255]);
+        assert_eq!(doc.get_pixel(0, 0).unwrap(), TRANSPARENT);
+        assert_eq!(doc.get_pixel(3, 3).unwrap(), TRANSPARENT);
+    }
+
+    #[test]
+    fn crop_and_resize_reject_a_zero_dimension() {
+        let mut doc = Document::new(4, 4).unwrap();
+        assert!(matches!(doc.crop(0, 0, 0, 4), Err(DocumentError::ZeroSize { .. })));
+        assert!(matches!(doc.resize(4, 0), Err(DocumentError::ZeroSize { .. })));
+    }
+
+    #[test]
+    fn doubling_the_size_replicates_each_pixel_into_a_block() {
+        let mut doc = Document::new(2, 2).unwrap();
+        doc.set_pixel(0, 0, [10, 20, 30, 255]).unwrap();
+        doc.resize(4, 4).unwrap();
+        assert_eq!((doc.width(), doc.height()), (4, 4));
+        for y in 0..2 {
+            for x in 0..2 {
+                assert_eq!(doc.get_pixel(x, y).unwrap(), [10, 20, 30, 255], "({x},{y})");
+            }
+        }
+        assert_eq!(doc.get_pixel(2, 0).unwrap(), TRANSPARENT);
+    }
+
+    #[test]
+    fn halving_the_size_samples_the_nearest_source_pixel() {
+        let mut doc = Document::new(4, 4).unwrap();
+        for y in 0..4 {
+            for x in 0..4 {
+                doc.set_pixel(x, y, [(x * 10) as u8, (y * 10) as u8, 0, 255]).unwrap();
+            }
+        }
+        doc.resize(2, 2).unwrap();
+        // dst 0 -> src 0, dst 1 -> src 2 (integer 1*4/2).
+        assert_eq!(doc.get_pixel(0, 0).unwrap(), [0, 0, 0, 255]);
+        assert_eq!(doc.get_pixel(1, 1).unwrap(), [20, 20, 0, 255]);
+    }
+
+    #[test]
+    fn resize_is_exact_and_reversible_for_integer_scales() {
+        let mut doc = Document::new(3, 3).unwrap();
+        doc.set_pixel(1, 1, [7, 8, 9, 255]).unwrap();
+        let before = doc.composite();
+        doc.resize(9, 9).unwrap();
+        doc.resize(3, 3).unwrap();
+        assert_eq!(doc.composite(), before, "3x up then down must round-trip exactly");
+    }
+
+    #[test]
+    fn resize_applies_to_every_layer_and_keeps_metadata() {
+        let mut doc = Document::new(2, 2).unwrap();
+        doc.add_layer("second");
+        doc.set_layer_opacity(1, 128).unwrap();
+        doc.set_pixel(0, 0, [1, 1, 1, 255]).unwrap();
+        doc.resize(4, 4).unwrap();
+        assert_eq!(doc.layer_count(), 2);
+        assert_eq!(doc.layers()[1].opacity(), 128);
+        assert_eq!(doc.layers()[1].name(), "second");
+        assert_eq!(doc.layers()[0].pixels().len(), 4 * 4 * 4);
     }
 }

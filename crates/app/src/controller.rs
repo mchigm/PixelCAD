@@ -17,9 +17,10 @@ use std::io;
 use std::path::Path;
 
 use pixelcad_core::{
-    open_project, serialize_project, Color, Command, Document, Engine, EngineError, SelectionRect,
-    PALETTE_SIZE,
+    base64, open_project, serialize_project, Axis, BrushShape, Color, Command, Document, Engine,
+    EngineError, Selection, PALETTE_SIZE,
 };
+use pixelcad_core::font::{Font, TextAlign};
 
 /// Minimum and maximum zoom levels (document pixels per screen pixel block).
 pub const MIN_ZOOM: u32 = 1;
@@ -42,7 +43,12 @@ pub enum Tool {
     Eyedropper,
     Line,
     Rectangle,
+    Ellipse,
+    Polyline,
+    Arrow,
+    Text,
     Select,
+    Lasso,
 }
 
 impl Tool {
@@ -55,7 +61,12 @@ impl Tool {
             Tool::Eyedropper => 'i',
             Tool::Line => 'l',
             Tool::Rectangle => 'r',
+            Tool::Ellipse => 'o', // "o" for oval; "e" is taken by the eraser
+            Tool::Polyline => 'p',
+            Tool::Arrow => 'a',
+            Tool::Text => 't',
             Tool::Select => 'm', // "m" for marquee
+            Tool::Lasso => 'f',  // "f" for free-form
         }
     }
 
@@ -64,14 +75,19 @@ impl Tool {
         Tool::ALL.into_iter().find(|t| t.shortcut() == key.to_ascii_lowercase())
     }
 
-    pub const ALL: [Tool; 7] = [
+    pub const ALL: [Tool; 12] = [
         Tool::Brush,
         Tool::Eraser,
         Tool::Fill,
         Tool::Eyedropper,
         Tool::Line,
         Tool::Rectangle,
+        Tool::Ellipse,
+        Tool::Polyline,
+        Tool::Arrow,
+        Tool::Text,
         Tool::Select,
+        Tool::Lasso,
     ];
 
     pub fn label(self) -> &'static str {
@@ -82,8 +98,23 @@ impl Tool {
             Tool::Eyedropper => "Pick",
             Tool::Line => "Line",
             Tool::Rectangle => "Rect",
+            Tool::Ellipse => "Ellipse",
+            Tool::Polyline => "Polyline",
+            Tool::Arrow => "Arrow",
+            Tool::Text => "Text",
             Tool::Select => "Select",
+            Tool::Lasso => "Lasso",
         }
+    }
+
+    /// Whether this tool commits on pointer release from an anchor point.
+    fn is_anchored(self) -> bool {
+        matches!(self, Tool::Line | Tool::Rectangle | Tool::Ellipse | Tool::Arrow | Tool::Select)
+    }
+
+    /// Whether this tool accumulates a free-form path while dragging.
+    fn is_path(self) -> bool {
+        matches!(self, Tool::Polyline | Tool::Lasso)
     }
 }
 
@@ -104,6 +135,18 @@ enum DragMode {
     Panning { anchor_pointer: (f32, f32), anchor_pan: (f32, f32) },
 }
 
+/// What was last copied. Session state, deliberately **not** part of the
+/// document or the command log: copying changes nothing, so recording it
+/// would put noise in every script. Pasting *is* recorded, as an
+/// `image.import`, so a session still replays exactly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Clipboard {
+    pub width: u32,
+    pub height: u32,
+    /// Packed RGBA8, row-major.
+    pub pixels: Vec<u8>,
+}
+
 /// Owns the [`Engine`] plus all view/tool state for the GUI.
 pub struct Controller {
     engine: Engine,
@@ -112,6 +155,14 @@ pub struct Controller {
     selected_palette_index: usize,
     tool: Tool,
     brush_size: u32,
+    brush_shape: BrushShape,
+    tolerance: u8,
+    opacity: u8,
+    text_buffer: String,
+    /// Points accumulated by a free-form (polyline / lasso) drag.
+    path: Vec<(i64, i64)>,
+    clipboard: Option<Clipboard>,
+    recent_colors: Vec<Color>,
     drag: DragMode,
 }
 
@@ -130,6 +181,13 @@ impl Controller {
             selected_palette_index: 0,
             tool: Tool::Brush,
             brush_size: 1,
+            brush_shape: BrushShape::Square,
+            tolerance: 0,
+            opacity: 255,
+            text_buffer: String::new(),
+            path: Vec::new(),
+            clipboard: None,
+            recent_colors: Vec::new(),
             drag: DragMode::Idle,
         }
     }
@@ -161,6 +219,7 @@ impl Controller {
         // Abandon any half-finished gesture so a tool switch mid-drag cannot
         // commit a stroke with the wrong tool's semantics.
         self.drag = DragMode::Idle;
+        self.path.clear();
         self.tool = tool;
     }
 
@@ -180,7 +239,7 @@ impl Controller {
         self.set_brush_size(self.brush_size.saturating_sub(1));
     }
 
-    pub fn selection(&self) -> Option<SelectionRect> {
+    pub fn selection(&self) -> Option<&Selection> {
         self.engine.selection()
     }
 
@@ -215,6 +274,7 @@ impl Controller {
             // Selecting a swatch is a document-level fact (it changes the
             // active colour), so it is recorded.
             let _ = self.engine.execute(Command::ColorSet { color });
+            self.remember_color(color);
         }
     }
 
@@ -270,6 +330,256 @@ impl Controller {
         self.document().layers().get(index).map(|l| l.visible()).unwrap_or(false)
     }
 
+
+    // ------------------------------------------------- brush / tool state
+
+    pub fn brush_shape(&self) -> BrushShape {
+        self.brush_shape
+    }
+
+    pub fn set_brush_shape(&mut self, shape: BrushShape) {
+        self.brush_shape = shape;
+    }
+
+    pub fn tolerance(&self) -> u8 {
+        self.tolerance
+    }
+
+    pub fn set_tolerance(&mut self, tolerance: u8) {
+        self.tolerance = tolerance;
+    }
+
+    pub fn opacity(&self) -> u8 {
+        self.opacity
+    }
+
+    /// Sets the stroke opacity.
+    ///
+    /// Because pixel writes *replace* rather than blend (which is what makes
+    /// the eraser work), opacity is delivered as the alpha actually written,
+    /// not as accumulating paint. Painting at 50 % twice therefore gives 50 %,
+    /// not 75 %. True flow needs a blend mode in the write path and is in
+    /// `BACKLOG.md`.
+    pub fn set_opacity(&mut self, opacity: u8) {
+        self.opacity = opacity;
+    }
+
+    pub fn text_buffer(&self) -> &str {
+        &self.text_buffer
+    }
+
+    pub fn set_text_buffer(&mut self, text: impl Into<String>) {
+        self.text_buffer = text.into();
+    }
+
+    /// Most recently used colours, newest first, capped at 8.
+    pub fn recent_colors(&self) -> &[Color] {
+        &self.recent_colors
+    }
+
+    fn remember_color(&mut self, color: Color) {
+        self.recent_colors.retain(|c| *c != color);
+        self.recent_colors.insert(0, color);
+        self.recent_colors.truncate(8);
+    }
+
+    /// The active colour with the current opacity applied to its alpha.
+    fn inked(&self) -> Color {
+        let c = self.current_color();
+        [c[0], c[1], c[2], ((c[3] as u32 * self.opacity as u32) / 255) as u8]
+    }
+
+    // ------------------------------------------------------- selection ops
+
+    pub fn select_all(&mut self) -> Result<(), EngineError> {
+        self.engine.execute(Command::SelectAll)
+    }
+
+    pub fn delete_selection(&mut self) -> Result<(), EngineError> {
+        self.engine.execute(Command::SelectionDelete)
+    }
+
+    /// Moves the selected pixels by `(dx, dy)` — the arrow-key nudge.
+    pub fn nudge(&mut self, dx: i64, dy: i64) -> Result<(), EngineError> {
+        self.engine.execute(Command::SelectionMove { dx, dy })
+    }
+
+    pub fn flip_selection(&mut self, axis: Axis) -> Result<(), EngineError> {
+        self.engine.execute(Command::SelectionFlip { axis })
+    }
+
+    pub fn rotate_selection(&mut self, degrees: u32) -> Result<(), EngineError> {
+        self.engine.execute(Command::SelectionRotate { degrees })
+    }
+
+    pub fn scale_selection(&mut self, width: u32, height: u32) -> Result<(), EngineError> {
+        self.engine.execute(Command::SelectionScale { width, height })
+    }
+
+    // ---------------------------------------------------------- clipboard
+
+    pub fn clipboard(&self) -> Option<&Clipboard> {
+        self.clipboard.as_ref()
+    }
+
+    /// Copies the selection from the active layer. With no selection, copies
+    /// the whole layer — matching what every editor does with Ctrl+A implied.
+    pub fn copy(&mut self) -> bool {
+        self.capture(false)
+    }
+
+    /// Copies what is actually *visible* in the selected region, flattening
+    /// every layer. This is Paint's `Ctrl+Shift+C`, and it is a genuinely
+    /// different operation from `copy`, not a convenience alias.
+    pub fn copy_composite(&mut self) -> bool {
+        self.capture(true)
+    }
+
+    fn capture(&mut self, composite: bool) -> bool {
+        let doc = self.document();
+        let (ox, oy, w, h) = match self.engine.selection() {
+            Some(s) if !s.is_empty() => s.bounds(),
+            _ => (0, 0, doc.width(), doc.height()),
+        };
+        if w == 0 || h == 0 {
+            return false;
+        }
+        let selection = self.engine.selection().cloned();
+        let flat = composite.then(|| doc.composite());
+
+        let mut pixels = Vec::with_capacity(w as usize * h as usize * 4);
+        for row in 0..h as i64 {
+            for col in 0..w as i64 {
+                let (x, y) = (ox + col, oy + row);
+                // Outside the mask reads as transparent, so a lasso copy
+                // carries its shape rather than a rectangle of neighbours.
+                let inside = selection.as_ref().is_none_or(|s| s.contains(x, y));
+                let color = if !inside || !doc.in_bounds(x, y) {
+                    [0, 0, 0, 0]
+                } else if let Some(buf) = &flat {
+                    let i = (y as usize * doc.width() as usize + x as usize) * 4;
+                    [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+                } else {
+                    doc.get_pixel(x, y).unwrap_or([0, 0, 0, 0])
+                };
+                pixels.extend_from_slice(&color);
+            }
+        }
+        self.clipboard = Some(Clipboard { width: w, height: h, pixels });
+        true
+    }
+
+    /// Copy, then clear the copied pixels.
+    pub fn cut(&mut self) -> Result<(), EngineError> {
+        if !self.copy() {
+            return Ok(());
+        }
+        if self.engine.selection().is_some() {
+            self.delete_selection()
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Pastes the clipboard at `(x, y)` and selects what was pasted.
+    ///
+    /// Emitted as `image.import` + `select.rect` in one undo group, so the
+    /// paste is fully replayable from the saved script even though the
+    /// clipboard itself never enters the command log.
+    pub fn paste_at(&mut self, x: i64, y: i64) -> Result<(), EngineError> {
+        let Some(clip) = self.clipboard.clone() else {
+            return Ok(());
+        };
+        self.engine.begin_group();
+        let result = self
+            .engine
+            .execute(Command::ImageImport {
+                x,
+                y,
+                width: clip.width,
+                height: clip.height,
+                data: base64::encode(&clip.pixels),
+            })
+            .and_then(|()| {
+                self.engine.execute(Command::SelectRect {
+                    x,
+                    y,
+                    width: clip.width,
+                    height: clip.height,
+                })
+            });
+        self.engine.end_group();
+        result
+    }
+
+    /// Pastes at the current selection's corner, or at the origin.
+    pub fn paste(&mut self) -> Result<(), EngineError> {
+        let (x, y) = match self.engine.selection() {
+            Some(s) => (s.x(), s.y()),
+            None => (0, 0),
+        };
+        self.paste_at(x, y)
+    }
+
+    /// Duplicates the selection in place, offset slightly so it is visible.
+    pub fn duplicate_selection(&mut self) -> Result<(), EngineError> {
+        if !self.copy() {
+            return Ok(());
+        }
+        let (x, y) = match self.engine.selection() {
+            Some(s) => (s.x(), s.y()),
+            None => (0, 0),
+        };
+        self.paste_at(x + 1, y + 1)
+    }
+
+    // ------------------------------------------------- canvas / layer ops
+
+    pub fn crop_to_selection(&mut self) -> Result<(), EngineError> {
+        let Some(s) = self.engine.selection() else {
+            return Err(EngineError::NoSelection);
+        };
+        let (x, y, width, height) = s.bounds();
+        self.engine.execute(Command::CanvasCrop { x, y, width, height })
+    }
+
+    pub fn resize_canvas(&mut self, width: u32, height: u32) -> Result<(), EngineError> {
+        self.engine.execute(Command::CanvasResize { width, height })
+    }
+
+    pub fn duplicate_active_layer(&mut self) -> Result<(), EngineError> {
+        let index = self.active_layer_index();
+        self.engine.execute(Command::LayerDuplicate { index })
+    }
+
+    pub fn merge_active_layer_down(&mut self) -> Result<(), EngineError> {
+        let index = self.active_layer_index();
+        self.engine.execute(Command::LayerMerge { index })
+    }
+
+    pub fn move_active_layer(&mut self, to: usize) -> Result<(), EngineError> {
+        let from = self.active_layer_index();
+        self.engine.execute(Command::LayerMove { from, to })
+    }
+
+    /// Stamps the current text buffer at `(x, y)`.
+    pub fn stamp_text(&mut self, x: i64, y: i64) -> Result<(), EngineError> {
+        if self.text_buffer.is_empty() {
+            return Ok(());
+        }
+        let color = self.inked();
+        let (text, scale) = (self.text_buffer.clone(), self.brush_size.max(1));
+        self.engine.execute(Command::TextDraw {
+            x,
+            y,
+            text,
+            font: Font::Small,
+            scale,
+            align: TextAlign::Left,
+            color,
+        })
+    }
+
     // ---------------------------------------------------------- view state
 
     pub fn zoom_in(&mut self) {
@@ -317,23 +627,43 @@ impl Controller {
         match self.tool {
             Tool::Brush | Tool::Eraser => {
                 let color = self.stroke_color();
-                let size = self.brush_size;
+                let (size, shape) = (self.brush_size, self.brush_shape);
                 self.engine.begin_group();
-                self.engine
-                    .execute(Command::BrushStroke { x0: x, y0: y, x1: x, y1: y, size, color })?;
+                self.engine.execute(Command::BrushStroke {
+                    x0: x,
+                    y0: y,
+                    x1: x,
+                    y1: y,
+                    size,
+                    shape,
+                    color,
+                })?;
                 self.drag = DragMode::Painting { last: (x, y) };
                 Ok(())
             }
             Tool::Fill => {
-                let color = self.current_color();
+                let (color, tolerance) = (self.inked(), self.tolerance);
                 self.drag = DragMode::Idle;
-                self.engine.execute(Command::FillBucket { x, y, color })
+                self.engine.execute(Command::FillBucket { x, y, tolerance, color })
             }
             Tool::Eyedropper => {
                 self.drag = DragMode::Idle;
-                self.engine.execute(Command::ColorPick { x, y })
+                self.engine.execute(Command::ColorPick { x, y })?;
+                let picked = self.current_color();
+                self.remember_color(picked);
+                Ok(())
             }
-            Tool::Line | Tool::Rectangle | Tool::Select => {
+            Tool::Text => {
+                self.drag = DragMode::Idle;
+                self.stamp_text(x, y)
+            }
+            tool if tool.is_path() => {
+                // Free-form: accumulate points now, commit on release.
+                self.path = vec![(x, y)];
+                self.drag = DragMode::Anchored { origin: (x, y), current: (x, y) };
+                Ok(())
+            }
+            _ => {
                 // Deferred until release: nothing is committed while the
                 // user is still choosing the end point.
                 self.drag = DragMode::Anchored { origin: (x, y), current: (x, y) };
@@ -347,7 +677,7 @@ impl Controller {
     fn stroke_color(&self) -> Color {
         match self.tool {
             Tool::Eraser => pixelcad_core::TRANSPARENT,
-            _ => self.current_color(),
+            _ => self.inked(),
         }
     }
 
@@ -359,13 +689,14 @@ impl Controller {
                 let (x, y) = self.screen_to_doc_clamped(screen_x, screen_y);
                 if (x, y) != last {
                     let color = self.stroke_color();
-                    let size = self.brush_size;
+                    let (size, shape) = (self.brush_size, self.brush_shape);
                     self.engine.execute(Command::BrushStroke {
                         x0: last.0,
                         y0: last.1,
                         x1: x,
                         y1: y,
                         size,
+                        shape,
                         color,
                     })?;
                     self.drag = DragMode::Painting { last: (x, y) };
@@ -374,6 +705,9 @@ impl Controller {
             }
             DragMode::Anchored { origin, .. } => {
                 let current = self.screen_to_doc_clamped(screen_x, screen_y);
+                if self.tool.is_path() && self.path.last() != Some(&current) {
+                    self.path.push(current);
+                }
                 self.drag = DragMode::Anchored { origin, current };
                 Ok(())
             }
@@ -396,7 +730,8 @@ impl Controller {
                 Ok(())
             }
             DragMode::Anchored { origin, current } => {
-                let color = self.current_color();
+                let color = self.inked();
+                let path = std::mem::take(&mut self.path);
                 let command = match self.tool {
                     Tool::Line => Command::LineDraw {
                         x0: origin.0,
@@ -410,16 +745,48 @@ impl Controller {
                         y0: origin.1,
                         x1: current.0,
                         y1: current.1,
+                        radius: 0,
                         fill: false,
                         color,
                     },
+                    Tool::Ellipse => Command::EllipseDraw {
+                        x0: origin.0,
+                        y0: origin.1,
+                        x1: current.0,
+                        y1: current.1,
+                        fill: false,
+                        color,
+                    },
+                    Tool::Arrow => Command::ArrowDraw {
+                        x0: origin.0,
+                        y0: origin.1,
+                        x1: current.0,
+                        y1: current.1,
+                        head: (self.brush_size * 4).max(4),
+                        color,
+                    },
+                    Tool::Polyline => {
+                        if path.len() < 2 {
+                            return Ok(());
+                        }
+                        Command::PolylineDraw { points: path, color }
+                    }
+                    Tool::Lasso => {
+                        if path.len() < 3 {
+                            // Too few points to enclose anything; treat it
+                            // as "the user cancelled" rather than drawing a
+                            // degenerate selection they cannot see.
+                            return Ok(());
+                        }
+                        Command::SelectLasso { points: path }
+                    }
                     Tool::Select => Command::SelectRect {
                         x: origin.0.min(current.0),
                         y: origin.1.min(current.1),
                         width: (origin.0 - current.0).unsigned_abs() as u32 + 1,
                         height: (origin.1 - current.1).unsigned_abs() as u32 + 1,
                     },
-                    // Unreachable: only these three tools use Anchored.
+                    // Unreachable: no other tool uses Anchored.
                     _ => return Ok(()),
                 };
                 self.engine.execute(command)
@@ -720,7 +1087,7 @@ mod tests {
         c.end_drag().unwrap();
         assert_eq!(
             c.selection(),
-            Some(SelectionRect { x: 2, y: 2, width: 3, height: 3 }),
+            Some(&Selection::rect(2, 2, 3, 3)),
             "the marquee is inclusive of both corners"
         );
 
@@ -845,7 +1212,7 @@ mod tests {
                     y0: 0,
                     x1: 0,
                     y1: 0,
-                    size: 1,
+                    size: 1, shape: BrushShape::Square,
                     color: c.current_color()
                 },
             ]
