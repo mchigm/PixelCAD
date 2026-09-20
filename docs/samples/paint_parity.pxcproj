@@ -1,0 +1,96 @@
+# paint_parity.pxcproj — Phase 1.5 dogfood artefact.
+#
+# A 160x120 "tool sampler" sheet that exercises every command added in the
+# Paint-parity phase, so the sample doubles as executable documentation of
+# the grammar. Four layers:
+#
+#   0  Sheet        background fill, border, title text
+#   1  Shapes       ellipse, rounded rectangle, polygons, arrow, polyline
+#   2  Transformed  built with brush + fill, then flipped, rotated and moved
+#   3  Labels       bitmap text in both faces, alignments and scales
+#
+# Render with:
+#   cargo run -p pixelcad-cli -- run docs/samples/paint_parity.pxcproj --out parity.png
+
+pixelcad.project version=1
+canvas.new width=160 height=120
+
+palette.set index=0 color="#101418"
+palette.set index=1 color="#f2f4f8"
+palette.set index=2 color="#4aa3ff"
+palette.set index=3 color="#ffb347"
+palette.set index=4 color="#ff5c5c"
+palette.set index=5 color="#7ee787"
+
+# ---------------------------------------------------------------- Sheet
+layer.rename index=0 name="Sheet"
+fill.bucket x=0 y=0 tolerance=0 color="#101418ff"
+rect.draw x0=1 y0=1 x1=158 y1=118 radius=6 fill=false color="#f2f4f8ff"
+text.draw x=6 y=5 text="PIXELCAD TOOL SAMPLER" font=bold scale=1 align=left color="#f2f4f8ff"
+line.draw x0=6 y0=15 x1=153 y1=15 color="#4aa3ffff"
+
+# --------------------------------------------------------------- Shapes
+layer.add name="Shapes"
+
+# Outlined and filled ellipses.
+ellipse.draw x0=8 y0=22 x1=44 y1=50 fill=false color="#4aa3ffff"
+ellipse.draw x0=14 y0=28 x1=38 y1=44 fill=true color="#4aa3ffff"
+
+# Rounded rectangle, and a sharp one for contrast.
+rect.draw x0=52 y0=22 x1=88 y1=50 radius=8 fill=false color="#ffb347ff"
+rect.draw x0=60 y0=30 x1=80 y1=42 radius=0 fill=true color="#ffb347ff"
+
+# Regular polygons: triangle, pentagon, octagon.
+polygon.draw x=104 y=36 radius=13 sides=3 rotation=-90 fill=false color="#7ee787ff"
+polygon.draw x=132 y=36 radius=13 sides=5 rotation=-90 fill=false color="#7ee787ff"
+polygon.draw x=132 y=36 radius=6 sides=8 rotation=0 fill=true color="#7ee787ff"
+
+# Arrow and polyline.
+arrow.draw x0=10 y0=58 x1=70 y1=58 head=8 color="#ff5c5cff"
+polyline.draw points="78,64 90,54 102,64 114,54 126,64 138,54" color="#ff5c5cff"
+
+# ---------------------------------------------------- Transformed pixels
+layer.add name="Transformed"
+
+# Build a small asymmetric motif with the round brush so a flip or rotate
+# is visibly different from the original.
+brush.stroke x0=14 y0=76 x1=38 y1=76 size=3 shape=round color="#f2f4f8ff"
+brush.stroke x0=14 y0=76 x1=14 y1=94 size=3 shape=round color="#f2f4f8ff"
+brush.stroke x0=20 y0=86 x1=30 y1=86 size=1 shape=square color="#4aa3ffff"
+
+# Copy it across by selecting, then transforming each copy differently.
+select.rect x=10 y=70 width=34 height=30
+selection.flip axis=horizontal
+select.clear
+
+# A second motif, flood filled with tolerance so the near-but-unequal
+# shades below merge into one region.
+rect.draw x0=60 y0=74 x1=96 y1=98 radius=4 fill=false color="#ffb347ff"
+pixel.set x=70 y=84 color="#ffb140ff"
+pixel.set x=71 y=84 color="#ffb54aff"
+fill.bucket x=78 y=86 tolerance=24 color="#ffb347ff"
+
+# A third motif: drawn, selected with a lasso, then rotated and nudged.
+polygon.draw x=124 y=86 radius=14 sides=4 rotation=0 fill=true color="#7ee787ff"
+select.lasso points="112,74 138,74 138,98 112,98"
+selection.rotate degrees=90
+selection.move dx=0 dy=0
+select.clear
+
+# --------------------------------------------------------------- Labels
+layer.add name="Labels"
+text.draw x=8 y=53 text="ELLIPSE" font=small scale=1 align=left color="#4aa3ffff"
+text.draw x=52 y=53 text="ROUNDED" font=small scale=1 align=left color="#ffb347ff"
+text.draw x=104 y=53 text="POLY" font=small scale=1 align=center color="#7ee787ff"
+text.draw x=10 y=66 text="ARROW" font=small scale=1 align=left color="#ff5c5cff"
+text.draw x=138 y=66 text="POLYLINE" font=small scale=1 align=right color="#ff5c5cff"
+text.draw x=80 y=101 text="TRANSFORMS + TOLERANCE FILL" font=bold scale=1 align=center color="#f2f4f8ff"
+text.draw x=80 y=109 text="pixelcad 1.5" font=small scale=1 align=center color="#4aa3ffff"
+
+# Duplicate the label layer and merge it straight back down: a no-op on the
+# image, but it proves both commands round-trip in a real file.
+layer.duplicate index=3
+layer.merge index=4
+
+# Leave the Shapes layer active for whoever opens this next.
+layer.select index=1

@@ -1,168 +1,148 @@
-# PROGRESS — Phase 1: Drawing MVP
+# PROGRESS — Phase 1.5: Paint Parity
 
-**Last updated:** 2026-09-20T03:00:00+08:00
+**Last updated:** 2026-09-20T05:30:00+08:00
 **Current task:** — (session complete)
-**Completed tasks:** 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11
+**Completed tasks:** 1, 2, 3, 4, 5, 6, 7
 **Current mode:** A
 
-> Phase 0's session log was archived to `Plans/archive/PROGRESS-phase0.md`
-> at the start of this session. This file covers ROADMAP Phase 1 only.
-> The self-contained result document is `PHASE2_RESULT.md`.
+> Phase 1's log is in `Plans/archive/` alongside its plan; `PHASE2_RESULT.md`
+> is the self-contained result document for ROADMAP Phase 1. This file
+> covers ROADMAP Phase 1.5 only.
 
 ## Log
 
-### 2026-09-19T23:20:00+08:00 — Phase 0 re-verification (pre-plan)
-Before planning, every Phase 0 acceptance criterion was independently
-re-checked in the repository as it exists now (not trusted from
-`PHASE1_RESULT.md`):
-- `cargo build --workspace` → `Finished dev profile ... in 0.41s`, 0 errors
-- `cargo test --workspace` → 23 + 1 + 26 + 1 = **51 passed, 0 failed**
-- `cargo tree -p pixelcad-core` → only `thiserror` → `thiserror-impl` →
-  `{proc-macro2, quote, syn, unicode-ident}`; no UI/GPU crate
-- `cargo run -p pixelcad-cli -- run docs/samples/ship.pxc` twice →
-  both sha256 `bde008684f8384379e33f514d15d4ca4c1aed97798d52a08bbb1cccd6f781232`,
-  matching the value recorded in `PHASE1_RESULT.md` exactly
-- Criterion 8 confirmed still PARTIAL at session start: `Profiles/` and
-  `Skills/` were still gitignored. Resolved this session by Task 1.
+### 2026-09-20T04:00:00+08:00 — Pre-flight: recovering an orphaned module
+An interrupted earlier session had left `crates/core/src/font.rs` (783
+lines) uncommitted and broken: the suite reported 60 tests instead of 170,
+one failure and one hang. Triage found two genuine bugs, **both caught by
+the file's own tests**, so the module was fixed rather than discarded:
 
-### 2026-09-19T23:55:00+08:00 — Task 1 complete
-- Implemented: archived the Phase 0 log; wrote this `PROGRESS.md`; created
-  `BACKLOG.md`; removed `/Profiles` and `/Skills` from `.gitignore` and
-  committed those four markdown files verbatim (I2 resolved, reasoning
-  written into `.gitignore` itself); `ROADMAP.md` Phase 1 → `ACTIVE`.
-- Tests: n/a. `git ls-files Profiles Skills` lists all four files.
+1. `GLYPHS_5X7` was a `const`, not a `static`. A `const` is substituted at
+   every use site, so each `&GLYPHS_5X7[i]` borrowed a freshly materialised
+   temporary: two lookups of the same character returned different
+   addresses and the 665-byte table was duplicated into every caller.
+2. `rasterize` clamped `scale` only at the lower bound, so `scale =
+   u32::MAX` was not slow but non-terminating (~10^19 iterations). Added
+   `MAX_SCALE = 64`, applied identically in `measure` and `rasterize` so
+   the two can never disagree about what will appear on screen.
+
+The one test asserting the old saturating contract was replaced with two
+regression tests (clamp behaviour, glyph-lookup identity). 21 font tests
+pass. Commit `6a772ac`.
+
+### 2026-09-20T04:10:00+08:00 — Task 1 complete (bootstrap)
+- `PLAN.md` written for Phase 1.5, scoped to the **P1 tier only** of the
+  maintainer's Paint feature matrix, with every deferred P1 row given an
+  explicit reason rather than being dropped silently.
+- `ROADMAP.md` gained a Phase 1.5 entry (inserted before Phase 2, because
+  this completes the Drawing MVP rather than starting the Concept System).
 - Mode used: A.
-- Deviations: none in content. Process note: `PLAN.md` was self-locked
-  under the maintainer's blanket pre-approval rather than by an explicit
-  per-plan sign-off. Recorded openly; see `PHASE2_RESULT.md` Section 6.
-- Commit `ffad2d6`.
 
-### 2026-09-20T00:30:00+08:00 — Tasks 2 and 3 complete (committed together)
-- Implemented: `document.rs` rewritten around `Layer` and a layer stack,
-  with `composite()` in integer math; 7 layer commands across
-  `command.rs`/`parser.rs`/`engine.rs`; CLI and GUI switched from
-  `Document::pixels()` (removed) to `Document::composite()`;
-  `content_hash()` extended over all layer metadata.
-- Three deliberate exactness properties keep Phase 0 output bit-identical:
-  `scale_u8(v, 255) == v`, `over(src, transparent) == src`, and a fast path
-  returning the buffer verbatim for a lone opaque visible layer. Each has
-  its own test.
-- Added the pinned regression test
-  `ship_script_composites_to_the_phase_0_byte_sequence` (FNV-1a
-  `9723217798654324057`) so this can never regress quietly.
-- Tests: **76 passed, 0 failed**. AC4 re-verified by hand: still
-  `bde0086…232`.
-- Mode used: D. Deviation: Tasks 2 and 3 merged into one commit because
-  Task 2 alone cannot compile the workspace by construction. Commit
-  `47c83b8`.
+### 2026-09-20T04:40:00+08:00 — Tasks 2-5 complete (core)
+- **New module `selection.rs`.** `SelectionRect` became `Selection`: a
+  bounding box plus an *optional* per-cell coverage mask. Lasso and
+  rectangle are now one concept rather than two parallel ones. Masks
+  normalise (an all-covered mask compares equal to the plain rectangle), so
+  `PartialEq` means "selects the same cells" rather than "was built the
+  same way".
+- **A real semantic decision in polygon scan-conversion.** Pure even-odd
+  filling follows the top-left rule and drops the bottom and right
+  boundary — correct for *rendering* a polygon, wrong for *selecting* one,
+  because a lasso traced around a square would fail to select the pixels
+  the user traced over. `from_polygon` therefore fills the interior *and*
+  stamps the outline with Bresenham, making the boundary inclusive. A test
+  pins the square case at 16 cells, not 9.
+- **16 new commands:** `select.all`, `select.lasso`,
+  `selection.{delete,move,flip,rotate,scale}`, `canvas.{crop,resize}`,
+  `layer.{duplicate,merge}`, `ellipse.draw`, `polygon.draw`, `arrow.draw`,
+  `polyline.draw`, `text.draw`.
+- **Three extended commands, all backward compatible:** `brush.stroke`
+  gained `shape=`, `rect.draw` gained `radius=`, `fill.bucket` gained
+  `tolerance=`. Each is optional and defaults to the Phase 1 behaviour,
+  which is exactly why `ship.pxc` and `blueprint.pxcproj` still hash to
+  `bde0086…232` and `abdf81e…f1a`.
+- **Geometry is integer-only throughout**: a 91-entry fixed-point sine
+  table for `polygon.draw`, an integer square root for `arrow.draw`, and a
+  row-scanning midpoint ellipse. `f64::sin` cannot promise bit-identical
+  results across targets; a table can.
+- **`selection.move` lifts before it clears.** Clearing first would make a
+  one-pixel nudge erase the pixels it had just written — a test
+  (`ac6_an_overlapping_nudge_does_not_smear`) pins this.
+- 39 behavioural tests added in `crates/core/tests/paint_parity.rs`, all
+  passing on the first run. Commits `1da8e94`, plus the test commit.
 
-### 2026-09-20T01:05:00+08:00 — Tasks 4 and 5 complete
-- Implemented: `current_color` and `selection` in `EngineState` (both
-  snapshotted, so undo restores tool state); commands `color.set`,
-  `color.pick`, `select.rect`, `select.clear`, `brush.stroke`, `rect.draw`,
-  `fill.bucket`; all pixel writes routed through `write_strict` (errors
-  off-canvas, preserving Phase 0 behaviour) or `write_lenient` (clips).
-- Flood fill is iterative with a `visited` bitmap and a fixed neighbour
-  order; the selection is a wall, not just a write mask, so a fill cannot
-  leak around the marquee.
-- The eraser is deliberately not a separate command — writes replace rather
-  than blend, so a transparent `brush.stroke` is the eraser.
-- AC6 made fail-closed via an exhaustive `variant_index` match with no
-  wildcard arm.
-- Tests: **97 passed, 0 failed**. Mode used: A. Commit `2a0dfdd`.
+### 2026-09-20T05:05:00+08:00 — Task 6 complete (GUI)
+- 12 tools (adds ellipse, polyline, arrow, text, lasso); internal clipboard
+  with cut / copy / copy-composite / paste / duplicate; select-all; delete;
+  arrow-key nudge; flip / rotate / crop; brush-shape toggle; fill
+  tolerance; stroke opacity; recent colours; grid toggle; zoom fit and 1:1;
+  canvas resize and selection scale; layer duplicate / merge / raise /
+  lower.
+- **A real bug the new tests caught:** `image.import` is selection-clipped
+  like every other write, so pasting while an old marquee was still active
+  silently discarded everything outside it. `paste_at` now emits
+  `select.rect` *before* `image.import`, which makes the clip a no-op and
+  leaves the pasted region selected — which is what the user wants to drag
+  next anyway.
+- Clipboard content is deliberately session state and never enters the
+  command log (copying mutates nothing). The *paste* is recorded, so a
+  session still replays exactly.
+- 12 new headless GUI tests. Commit `251c188`.
+- Mode used: A. Two Slint-specific corrections were needed, both caught by
+  the build: `opacity` is a reserved element property (renamed to
+  `stroke-opacity`), and percentages auto-convert only on size properties.
 
-### 2026-09-20T01:30:00+08:00 — Task 6 complete
-- Implemented: history restructured to `Vec<Vec<Command>>` (one *step* per
-  undo), plus `begin_group`/`end_group`/`group_open`/`step_count`.
-  `history()` flattens, so grouping never leaks into the file format.
-- Edge cases covered: empty and all-failed groups leave no phantom step;
-  `begin_group` closes a dangling group; `end_group` is idempotent; `undo`
-  mid-group closes it first; a new group after undo clears redo.
-- Tests: **104 passed, 0 failed**. Mode used: D. Commit `6e309a3`.
+### 2026-09-20T05:30:00+08:00 — Task 7 complete (sample, docs, close-out)
+- `docs/samples/paint_parity.pxcproj`: a 160x120 four-layer tool sampler
+  (Sheet / Shapes / Transformed / Labels) exercising every new command.
+  Renders deterministically to sha256 `c056856314cd3b45…`. Visually checked
+  once via an ASCII-luminance dump of the decoded PNG.
+- 7 tests assert the sampler keeps using the commands it exists to
+  demonstrate, uses the new *optional fields* rather than only their
+  defaults, leaves no stale selection active, and puts ink on every layer.
+- `README.md`: the full grammar including all 35 commands, the optional
+  fields and their defaults, the expanded shortcut table, and the note on
+  replace-vs-blend opacity.
+- `BACKLOG.md` rewritten: the 8 deferred **P1** rows each with a reason,
+  plus the P2–P4 tiers recorded so they are not rediscovered from scratch.
 
-### 2026-09-20T01:50:00+08:00 — Task 7 complete
-- Implemented: `project.rs` with `PROJECT_FORMAT_VERSION = 1`, a
-  `pixelcad.project version=N` header, `serialize_project`/`parse_project`/
-  `open_project`, typed errors. Parsing completes before execution and
-  `open_project` builds a fresh engine, so a bad file cannot half-apply.
-  Legacy headerless `.pxc` loads as version 0. Save→load→save is a proven
-  byte-identical fixed point. CLI opens both formats through one path.
-- Deviation from `ROADMAP.md`'s "archive" wording: a versioned **text**
-  container, not a zip. Rationale in the module header and in
-  `PHASE2_RESULT.md` Section 6.
-- Tests: **117 passed, 0 failed**. Mode used: A. Commit `bf9ece2`.
+## Acceptance Criteria Results
 
-### 2026-09-20T02:05:00+08:00 — Task 8 complete
-- Implemented: `base64.rs` (RFC 4648, no new dependency — re-verified with
-  `cargo tree`); `image.import` writing raw RGBA8 onto the active layer,
-  rejecting corrupt base64 and length/dimension mismatches; `pixelcad-cli
-  import` normalising any PNG colour type to RGBA8.
-- New `crates/cli/tests/import_round_trip.rs` drives the real binary for
-  AC11, AC12, AC10-at-binary-level, and legacy-script compatibility.
-- Tests: **132 passed, 0 failed**. Mode used: A. Commit `61b58e7`.
-
-### 2026-09-20T02:40:00+08:00 — Task 9 complete
-- Implemented: `Tool` enum and brush size in `Controller`; a third drag
-  mode (`Anchored`) so line/rect/marquee commit only on release; layer
-  operations; swatch editing; project open/save. Each pointer drag is
-  wrapped in `begin_group`/`end_group`, satisfying AC13.
-- `handle_shortcut()` holds the whole shortcut table in Rust so it is
-  unit-testable and collapses Ctrl/Cmd into one `accel` flag.
-- `open_project_file` swaps the engine only after the replacement is fully
-  built, so a failed Open cannot damage open work.
-- `.slint` gained a tool column, brush stepper, layer panel (displayed
-  top-first, index converted in Rust), hex swatch editor and project
-  controls. One fix needed: Slint only auto-converts percentages on size
-  properties, not on `x`.
-- Tests: **162 passed, 0 failed**, zero warnings. Mode used: A. Commit
-  `d0583a2`.
-
-### 2026-09-20T02:55:00+08:00 — Task 10 complete
-- Implemented: `docs/samples/blueprint.pxcproj` — 128×96, four layers
-  (Paper / Grid / Hull / Annotation), using 13 distinct commands including
-  layer opacity and a selection-masked fill. Rendered sha256
-  `abdf81edb8e8c52f7aba5c7977bf66bc5bc622eecac54456e099120b21d08f1a`,
-  identical across two runs. Visually inspected once via an ASCII-luminance
-  dump of the decoded PNG (no desktop screenshot, so no personal data was
-  captured — Phase 0 had to delete its screenshot for that reason).
-- 7 tests in `core/tests/blueprint_dogfood.rs` plus a CLI byte-identity
-  test. One of them asserts the sample still *covers* each required
-  command, so the artefact cannot silently stop dogfooding.
-- `README.md` rewritten with the complete grammar, both file formats, the
-  strict-vs-lenient out-of-bounds rule, and the control table.
-- Tests: **170 passed, 0 failed**. Mode used: A. Commit `1b2af1c`.
-
-### 2026-09-20T03:00:00+08:00 — Task 11 complete (close-out)
-- Ran the full 19-criterion acceptance checklist; every one PASS with the
-  exact command and observed output recorded in `PHASE2_RESULT.md`
-  Section 2.
-- Wrote `PHASE2_RESULT.md` (9 sections, mirroring `PHASE1_RESULT.md`).
-- Archived `PLAN.md` → `Plans/archive/PLAN-phase1.md` with all criteria
-  ticked and Status → COMPLETE.
-- `ROADMAP.md`: Phase 1 → `COMPLETE` (Locked 2026-09-19, Completed
-  2026-09-20). Phase 2 deliberately left `PENDING` — it becomes `ACTIVE`
-  only when its own plan is drafted and locked, which is not this
-  session's job.
-- `Skills/INDEX.md` corrected (its heading said "Profiles") and annotated
-  with the I2 decision. `Profiles/INDEX.md` left untouched: it still
-  describes reality accurately, and `Profiles/**` is under a
-  must-not-modify constraint.
-- Verified the constraint held: `git log --follow -- Profiles/Planner/profile.md`
-  shows exactly one commit, the one that added it. No profile bytes changed.
+| # | Result | Evidence |
+|---|---|---|
+| AC1 | **PASS** | `cargo build --workspace` → `Finished dev profile`, 0 errors, **0 warnings** |
+| AC2 | **PASS** | `cargo test --workspace` → **274 passed, 0 failed** (target was ≥ 260; Phase 1 baseline 191) |
+| AC3 | **PASS** | `cargo tree -p pixelcad-core` → only `thiserror` + its proc-macro chain. Both new core modules (`selection.rs`, and the recovered `font.rs`) are dependency-free by design |
+| AC4 | **PASS** | `ship.pxc` → `bde008684f838437…`, `blueprint.pxcproj` → `abdf81edb8e8c52f…` — both unchanged from Phase 1 |
+| AC5 | **PASS** | `ac5_a_lasso_selects_a_non_rectangular_region`, `ac5_drawing_through_a_lasso_is_clipped_to_its_shape` |
+| AC6 | **PASS** | `ac6_selection_move_carries_the_pixels_and_the_marquee`, `ac6_an_overlapping_nudge_does_not_smear`, `moving_a_lasso_selection_moves_only_its_masked_pixels` |
+| AC7 | **PASS** | `ac7_flipping_twice_is_the_identity`, `ac7_four_quarter_turns_are_the_identity`, `rotate_90_transposes_a_non_square_selection` |
+| AC8 | **PASS** | `cut_copy_and_paste_round_trip_through_the_toolbar` — cut then paste elsewhere reproduces the pixels and empties the source |
+| AC9 | **PASS** | `ac9_fill_tolerance_spreads_across_near_colours_and_stops_outside_it` |
+| AC10 | **PASS** | `ac10_a_round_brush_is_not_a_square_one` — 25 px square vs fewer for the disc, corners empty |
+| AC11 | **PASS** | `ac11_*` for ellipse (hollow vs filled, plus symmetry), rounded rectangle, polygon, arrow, polyline |
+| AC12 | **PASS** | `ac12_text_stamps_glyphs_that_match_the_font_table` compares against `font::rasterize` directly |
+| AC13 | **PASS** | `ac13_crop_and_resize_run_through_the_engine_and_clear_the_selection`, plus 8 `document.rs` tests |
+| AC14 | **PASS** | `ac14_layer_duplicate_and_merge_through_the_engine` — merging is asserted to be *visually invisible* |
+| AC15 | **PASS** | `every_command_variant_is_covered_by_the_round_trip_test` still fail-closed at `VARIANT_COUNT = 35` |
+| AC16 | **PASS** | `ac16_*` tests for absent `shape`, `radius` and `tolerance`; AC4 is the end-to-end proof |
+| AC17 | **PASS** | 12 new headless GUI tests (select-all, delete, nudge, cut/copy/paste, copy-composite, duplicate/merge, flip/rotate/crop, grid and zoom presets, all 12 tool shortcuts, recent colours, text, lasso) |
+| AC18 | **PASS** | `docs/samples/paint_parity.pxcproj`, 7 tests, byte-identical across runs |
+| AC19 | **PASS** | `README.md` documents all 35 commands, optional-field defaults, and the full shortcut table |
 
 ## Current Blockers
 
 None.
 
-## Backlog (out-of-scope items discovered during execution)
+## Backlog
 
-See `BACKLOG.md` (7 open items). Three further candidates surfaced during
-Task 9 and are recorded in `PHASE2_RESULT.md` Section 8 for the next
-Planner: no file dialogs; no canvas resize/crop/new-document; no GUI
-affordance for the existing `layer.move` command.
+See `BACKLOG.md`. Eight **P1** rows are deferred with explicit reasons; the
+three most likely to be missed are anti-aliasing (blocked on a product
+decision, not effort), OS-clipboard interop (needs a new dependency), and
+Shift-constrained drawing (needs modifier state threaded from Slint).
 
 ## Resumption
 
-Nothing to resume — Phase 1 is complete. A new session should start at
+Nothing to resume — Phase 1.5 is complete. A new session should start at
 `ROADMAP.md`'s Session Protocol step 1 for Phase 2 ("Concept System"),
-reading `PHASE2_RESULT.md` Section 8 first.
+reading `PHASE2_RESULT.md` Section 8 and then `BACKLOG.md`.

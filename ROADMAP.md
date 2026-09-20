@@ -50,7 +50,7 @@ project file (.pxc archive), PNG import.
 **Exit criterion:** PixelCAD is a usable, focused pixel/blueprint editor with
 no AI or CAD — sufficient to draw a historical ship blueprint end to end.
 
-### Phase 1.5 — Paint Parity                    [ACTIVE]
+### Phase 1.5 — Paint Parity                    [COMPLETE]
 The P1 tier of the Microsoft Paint feature matrix: mask-based selections
 (lasso, select-all, move, nudge, delete, flip, rotate, scale), clipboard
 (cut/copy/copy-composite/paste/duplicate), brush shapes, fill tolerance,
@@ -121,7 +121,7 @@ Phase 5b.
 |-------|--------|--------|-----------|
 | 0 | COMPLETE | 2026-09-19 | 2026-09-19 |
 | 1 | COMPLETE | 2026-09-19 | 2026-09-20 |
-| 1.5 | ACTIVE | 2026-09-20 | — |
+| 1.5 | COMPLETE | 2026-09-20 | 2026-09-20 |
 | 2 | PENDING | — | — |
 | 3 | PENDING | — | — |
 | 4 | PENDING | — | — |

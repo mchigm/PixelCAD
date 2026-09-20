@@ -1,7 +1,11 @@
 # PLAN — Phase 1.5: Paint Parity
 
 **Created:** 2026-09-20T04:00:00+08:00
-**Status:** LOCKED
+**Status:** COMPLETE
+**Completed:** 2026-09-20T05:30:00+08:00
+
+> All 19 acceptance criteria PASS. Evidence is in `PROGRESS.md`'s close-out
+> entry and reproducible with the commands in `README.md`.
 **Product:** PixelCAD (`pixelcad`)
 **ROADMAP phase:** Phase 1.5 — "Paint Parity" (inserted; completes the
 Drawing MVP rather than starting Phase 2's Concept System)
@@ -72,43 +76,43 @@ each deferred for a stated reason rather than silently dropped:
 
 ## Acceptance Criteria
 
-- [ ] **AC1** — `cargo build --workspace` succeeds with zero errors and zero
+- [x] **AC1** — `cargo build --workspace` succeeds with zero errors and zero
       warnings
-- [ ] **AC2** — `cargo test --workspace` passes with ≥ 260 tests, 0 failures
-- [ ] **AC3** — `cargo tree -p pixelcad-core` still shows only `thiserror`
-- [ ] **AC4** — both existing samples still render byte-identically:
+- [x] **AC2** — `cargo test --workspace` passes with ≥ 260 tests, 0 failures
+- [x] **AC3** — `cargo tree -p pixelcad-core` still shows only `thiserror`
+- [x] **AC4** — both existing samples still render byte-identically:
       `ship.pxc` → `bde0086…232`, `blueprint.pxcproj` → `abdf81e…f1a`
-- [ ] **AC5** — a lasso selection selects a non-rectangular region: a pixel
+- [x] **AC5** — a lasso selection selects a non-rectangular region: a pixel
       inside the polygon is in the selection and one inside the bounding box
       but outside the polygon is not
-- [ ] **AC6** — `selection.move` moves the selected *pixels*, leaves
+- [x] **AC6** — `selection.move` moves the selected *pixels*, leaves
       transparency behind, and carries the selection with them
-- [ ] **AC7** — flip is an involution (twice = identity) and rotate 4×90° is
+- [x] **AC7** — flip is an involution (twice = identity) and rotate 4×90° is
       the identity, both asserted on exact pixels
-- [ ] **AC8** — cut → paste elsewhere reproduces the cut pixels exactly and
+- [x] **AC8** — cut → paste elsewhere reproduces the cut pixels exactly and
       leaves the source region empty
-- [ ] **AC9** — `fill.bucket` with tolerance spreads across near-but-unequal
+- [x] **AC9** — `fill.bucket` with tolerance spreads across near-but-unequal
       colours and stops at a colour outside tolerance
-- [ ] **AC10** — a round brush of size 5 is not the square one: it paints
+- [x] **AC10** — a round brush of size 5 is not the square one: it paints
       fewer pixels and omits the corners
-- [ ] **AC11** — ellipse, rounded rectangle, polygon, arrow and polyline each
+- [x] **AC11** — ellipse, rounded rectangle, polygon, arrow and polyline each
       have exact-pixel tests, filled and outlined where applicable
-- [ ] **AC12** — `text.draw` stamps legible glyphs: rendering `"A"` matches
+- [x] **AC12** — `text.draw` stamps legible glyphs: rendering `"A"` matches
       the font table exactly, and alignment/scale behave as `font.rs` defines
-- [ ] **AC13** — `canvas.crop` and `canvas.resize` preserve content
+- [x] **AC13** — `canvas.crop` and `canvas.resize` preserve content
       correctly across *all* layers, and resize is nearest-neighbour exact
-- [ ] **AC14** — `layer.duplicate` produces an independent copy and
+- [x] **AC14** — `layer.duplicate` produces an independent copy and
       `layer.merge` composites down without changing the visible result
-- [ ] **AC15** — every new `Command` variant round-trips through the parser
+- [x] **AC15** — every new `Command` variant round-trips through the parser
       (the fail-closed `variant_index` test still compiles and passes)
-- [ ] **AC16** — optional fields are backward compatible: a `brush.stroke`
+- [x] **AC16** — optional fields are backward compatible: a `brush.stroke`
       with no `shape`, a `rect.draw` with no `radius` and a `fill.bucket`
       with no `tolerance` all parse and behave exactly as in Phase 1
-- [ ] **AC17** — headless GUI tests cover: select-all, delete, nudge, cut,
+- [x] **AC17** — headless GUI tests cover: select-all, delete, nudge, cut,
       copy, paste, duplicate layer, and the new tool shortcuts
-- [ ] **AC18** — a new sample `docs/samples/paint_parity.pxcproj` exercises
+- [x] **AC18** — a new sample `docs/samples/paint_parity.pxcproj` exercises
       every new command and renders deterministically
-- [ ] **AC19** — `README.md` documents the complete grammar including all new
+- [x] **AC19** — `README.md` documents the complete grammar including all new
       commands and the updated shortcut table
 
 ## Constraints

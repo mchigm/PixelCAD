@@ -46,21 +46,42 @@ cargo run -p pixelcad-app
 
 ### Controls
 
+Shortcuts use `Cmd` on macOS and `Ctrl` on Linux/Windows; both are written
+below as **accel**.
+
 | Action | How |
 |---|---|
-| Draw / erase | Left-click-drag with the Brush or Eraser tool |
-| Pan | Right-click-drag, or hold Space and left-click-drag |
-| Zoom | Scroll (grid appears at 8× and above), or `+` / `-` |
-| Pick a tool | `b` brush, `e` eraser, `g` fill, `i` eyedropper, `l` line, `r` rectangle, `m` marquee |
-| Brush size | `[` / `]`, or the − / + buttons |
-| Palette slot | `1`–`8`, or click a swatch |
+| Pick a tool | `b` brush, `e` eraser, `g` fill, `i` eyedropper, `l` line, `r` rectangle, `o` ellipse, `p` polyline, `a` arrow, `t` text, `m` marquee, `f` lasso |
+| Draw / erase | Left-click-drag with the Brush or Eraser |
+| Brush size / shape | `[` / `]`, or the − / + buttons; **square/round** toggles the tip |
+| Fill tolerance | **Tol** − / + (0 = exact match, like Phase 1) |
+| Stroke opacity | **Op** − / + (sets the alpha written; see the note below) |
+| Pan | Right-click-drag, or hold `Space` and left-click-drag |
+| Zoom | Scroll, or `+` / `-`; **Fit** = accel+`9`, **1:1** = accel+`0` |
+| Grid | **Grid on/off**, or `G` (appears at 8× and above) |
+| Palette slot | `1`–`8`, or click a swatch; **Recent** keeps the last 8 colours |
 | Edit a swatch | Select it, type a hex value, press **Set** |
-| Undo / redo | `Ctrl`/`Cmd`+`Z`, `Shift`+`Ctrl`/`Cmd`+`Z`, or the buttons |
-| Clear selection | `Ctrl`/`Cmd`+`D`, or **Clear selection** |
-| Layers | **Add layer** / **Delete layer**; click a row to select it, its checkbox to hide it |
+| Select all | accel+`A`, or **All** |
+| Clear selection | `Shift`+accel+`D`, or **Clear selection** |
+| Delete selection | `Delete` / `Backspace`, or **Delete** |
+| Nudge selection | Arrow keys (moves the *pixels*, not just the marquee) |
+| Cut / copy / paste | accel+`X` / `C` / `V` |
+| Copy visible layers | `Shift`+accel+`C`, or **Copy vis.** |
+| Duplicate selection | accel+`D` |
+| Flip / rotate | accel+`H` / accel+`U` / accel+`R`, or **Flip H**, **Flip V**, **Rotate** |
+| Crop to selection | **Crop** |
+| Resize canvas | Type width and height, press **Resize**; **Scale sel** resamples the selection |
+| Undo / redo | accel+`Z`, `Shift`+accel+`Z`, or the buttons |
+| Layers | **Add** (accel+`N`), **Duplicate** (accel+`J`), **Merge down** (accel+`E`), **Raise** / **Lower**, **Delete**; click a row to select it, its checkbox to hide it |
 | Save / open | **Save project** and **Open** write and read `.pxcproj`; **Save script** writes plain `.pxc` |
 
 One pointer drag is one undo step, no matter how many commands it emits.
+
+**A note on opacity.** Pixel writes *replace* rather than blend — that is
+what makes the eraser erase instead of painting white. Opacity is therefore
+the alpha actually written, so painting twice at 50 % gives 50 %, not 75 %.
+Accumulating "flow" needs a blend mode in the write path and is in
+`BACKLOG.md`.
 
 ## File formats
 
@@ -91,19 +112,60 @@ layer.opacity  index=<usize> value=<0..255>
 select.rect    x=<i64> y=<i64> width=<u32> height=<u32>
 select.clear
 
+layer.duplicate index=<usize>                  # independent copy, above
+layer.merge    index=<usize>                   # composite down into index-1
+
+# Selection — clips every subsequent pixel write
+select.all
+select.rect    x=<i64> y=<i64> width=<u32> height=<u32>
+select.lasso   points="x,y x,y ..."            # closed polygon, boundary included
+select.clear
+
+# Selection contents (all need an active selection)
+selection.delete
+selection.move   dx=<i64> dy=<i64>             # moves the pixels, not just the marquee
+selection.flip   axis=<horizontal|vertical>
+selection.rotate degrees=<90|180|270>
+selection.scale  width=<u32> height=<u32>      # nearest-neighbour
+
+# Canvas
+canvas.crop    x=<i64> y=<i64> width=<u32> height=<u32>
+canvas.resize  width=<u32> height=<u32>        # nearest-neighbour
+
 # Drawing (all act on the active layer)
 pixel.set      x=<i64> y=<i64> color=<hex>
 line.draw      x0=<i64> y0=<i64> x1=<i64> y1=<i64> color=<hex>
-brush.stroke   x0=<i64> y0=<i64> x1=<i64> y1=<i64> size=<u32> color=<hex>
-rect.draw      x0=<i64> y0=<i64> x1=<i64> y1=<i64> fill=<true|false> color=<hex>
-fill.bucket    x=<i64> y=<i64> color=<hex>
+brush.stroke   x0=<i64> y0=<i64> x1=<i64> y1=<i64> size=<u32> [shape=<square|round>] color=<hex>
+rect.draw      x0=<i64> y0=<i64> x1=<i64> y1=<i64> [radius=<u32>] fill=<bool> color=<hex>
+ellipse.draw   x0=<i64> y0=<i64> x1=<i64> y1=<i64> fill=<bool> color=<hex>
+polygon.draw   x=<i64> y=<i64> radius=<u32> sides=<u32> [rotation=<deg>] fill=<bool> color=<hex>
+arrow.draw     x0=<i64> y0=<i64> x1=<i64> y1=<i64> [head=<u32>] color=<hex>
+polyline.draw  points="x,y x,y ..." color=<hex>
+fill.bucket    x=<i64> y=<i64> [tolerance=<0-255>] color=<hex>
+text.draw      x=<i64> y=<i64> text="..." [font=<small|bold>] [scale=<u32>]
+               [align=<left|center|right>] color=<hex>
 image.import   x=<i64> y=<i64> width=<u32> height=<u32> data="<base64 rgba8>"
 ```
+
+Fields in `[brackets]` are optional. Every one of them defaults to the
+pre-1.5 behaviour (`shape=square`, `radius=0`, `tolerance=0`,
+`font=small`, `scale=1`, `align=left`, `rotation=0`), which is why scripts
+written before those parameters existed still render byte-identically.
 
 Two things worth knowing:
 
 - **There is no eraser command.** Pixel writes replace rather than blend, so
   `brush.stroke … color="#00000000"` *is* the eraser.
+- **A selection is a shape, not just a box.** `select.lasso` carries a
+  coverage mask, so drawing, deleting and moving all respect the traced
+  outline rather than its bounding rectangle.
+- **Text is a bitmap operation.** It uses the in-repo 5x7 typeface
+  (`crates/core/src/font.rs`), not a system font — a system font would be
+  floating point, platform-dependent, and would drag a shaping dependency
+  into `pixelcad-core`.
+- **Geometry is integer-only**, including a fixed-point sine table for
+  `polygon.draw` and an integer square root for `arrow.draw`, so shapes are
+  bit-identical on every platform rather than merely similar.
 - `pixel.set` and `line.draw` **error** on an out-of-canvas coordinate;
   `brush.stroke`, `rect.draw`, `fill.bucket` and `image.import` clip
   silently, because a wide brush at the border must not abort a stroke.
@@ -135,6 +197,13 @@ executes, so it can never half-apply to an open document.
 - `docs/samples/blueprint.pxcproj` — the Phase 1 artefact: a 128×96
   four-layer historical ship blueprint (paper, grid, hull, annotation)
   exercising every tool, layer opacity, and a selection-masked fill.
+- `docs/samples/paint_parity.pxcproj` — the Phase 1.5 artefact: a 160×120
+  four-layer tool sampler covering ellipses, rounded rectangles, polygons,
+  arrows, polylines, bitmap text, lasso selection, flip/rotate/move, a
+  tolerance fill, and layer duplicate/merge.
+
+A test asserts each sample still *uses* the commands it exists to
+demonstrate, so a sample cannot quietly stop dogfooding them.
 
 ## License
 
