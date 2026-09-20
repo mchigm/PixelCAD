@@ -9,6 +9,7 @@ pub mod base64;
 pub mod command;
 pub mod document;
 pub mod engine;
+pub mod font;
 pub mod parser;
 pub mod project;
 
