@@ -44,6 +44,39 @@ is a hard invariant, enforced by tests, not an incidental property.
 cargo run -p pixelcad-app
 ```
 
+On first launch the app detects your operating system and asks once whether
+to use the matching window layout; the choice is saved and can be changed
+later in **Settings → Style**.
+
+### The window
+
+Two layouts share one codebase:
+
+- **Linux** stacks horizontal bands (title bar, ribbon tabs with the **Home**
+  toolbar, file tabs, canvas, style row, command strip, status tail), in the
+  GIMP/Krita idiom.
+- **macOS** keeps the native title bar, condenses the file controls into an
+  in-content top bar, and docks the eight panel icons (**File / Main / Style /
+  Secondary / Tool / Command / Layers / AI**) in a horizontal strip along the
+  bottom edge. Clicking an icon expands its panel vertically upward;
+  clicking again collapses it. Fullscreen splits the top bar into two rows
+  and reveals (WIP) per-panel pop-out markers.
+
+Features from the design that are not implemented yet render as dashed,
+amber-marked **WIP** controls rather than being hidden. The full
+LIVE/PARTIAL/WIP classification is in `docs/design/ui-redesign-spec.md`,
+and each WIP item's destination phase is in
+`docs/design/ui-roadmap-mapping.md`.
+
+Settings (**gear icon**) persist to `settings.toml` in the platform config
+directory (e.g. `~/Library/Application Support/dev.PixelCAD.PixelCAD/settings.toml`
+on macOS, `~/.config/pixelcad/settings.toml` on Linux). Style offers interface
+style (Auto / Linux / macOS), colour scheme (dark / light / high contrast),
+colour design (cyanotype / graphite / amber / phosphor), text style
+(compact / normal / comfortable) plus a monospace-labels switch, icon size,
+and an accent-colour override. Everything applies live and saves
+immediately — there is no Apply button.
+
 ### Controls
 
 Shortcuts use `Cmd` on macOS and `Ctrl` on Linux/Windows; both are written
@@ -53,24 +86,24 @@ below as **accel**.
 |---|---|
 | Pick a tool | `b` brush, `e` eraser, `g` fill, `i` eyedropper, `l` line, `r` rectangle, `o` ellipse, `p` polyline, `a` arrow, `t` text, `m` marquee, `f` lasso |
 | Draw / erase | Left-click-drag with the Brush or Eraser |
-| Brush size / shape | `[` / `]`, or the − / + buttons; **square/round** toggles the tip |
-| Fill tolerance | **Tol** − / + (0 = exact match, like Phase 1) |
-| Stroke opacity | **Op** − / + (sets the alpha written; see the note below) |
+| Brush size / shape | `[` / `]`, or the − / + buttons; the brush-shape button toggles the tip |
+| Fill tolerance | **tol− / tol+** (0 = exact match, like Phase 1) |
+| Stroke opacity | **op− / op+** (sets the alpha written; see the note below) |
 | Pan | Right-click-drag, or hold `Space` and left-click-drag |
 | Zoom | Scroll, or `+` / `-`; **Fit** = accel+`9`, **1:1** = accel+`0` |
 | Grid | **Grid on/off**, or `G` (appears at 8× and above) |
 | Palette slot | `1`–`8`, or click a swatch; **Recent** keeps the last 8 colours |
 | Edit a swatch | Select it, type a hex value, press **Set** |
-| Select all | accel+`A`, or **All** |
+| Select all | accel+`A`, or **Select all** |
 | Clear selection | `Shift`+accel+`D`, or **Clear selection** |
 | Delete selection | `Delete` / `Backspace`, or **Delete** |
 | Nudge selection | Arrow keys (moves the *pixels*, not just the marquee) |
 | Cut / copy / paste | accel+`X` / `C` / `V` |
-| Copy visible layers | `Shift`+accel+`C`, or **Copy vis.** |
+| Copy visible layers | `Shift`+accel+`C`, or **Copy visible** |
 | Duplicate selection | accel+`D` |
-| Flip / rotate | accel+`H` / accel+`U` / accel+`R`, or **Flip H**, **Flip V**, **Rotate** |
+| Flip / rotate | accel+`H` / accel+`U` / accel+`R`, or the flip and rotate buttons in the Select group |
 | Crop to selection | **Crop** |
-| Resize canvas | Type width and height, press **Resize**; **Scale sel** resamples the selection |
+| Resize canvas | Type width and height, press **Resize**; **Scale sel** resamples the selection (bottom bar) |
 | Undo / redo | accel+`Z`, `Shift`+accel+`Z`, or the buttons |
 | Layers | **Add** (accel+`N`), **Duplicate** (accel+`J`), **Merge down** (accel+`E`), **Raise** / **Lower**, **Delete**; click a row to select it, its checkbox to hide it |
 | Save / open | **Save project** and **Open** write and read `.pxcproj`; **Save script** writes plain `.pxc` |

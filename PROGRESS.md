@@ -1,148 +1,321 @@
-# PROGRESS — Phase 1.5: Paint Parity
+# PROGRESS — Phase 1.75: Platform-Aware UI Shell & Settings
 
-**Last updated:** 2026-09-20T05:30:00+08:00
-**Current task:** — (session complete)
+**Last updated:** 2026-09-22T04:20:00+08:00
+**Current task:** Task 8 — ROADMAP/BACKLOG updates and future-phase mapping
 **Completed tasks:** 1, 2, 3, 4, 5, 6, 7
 **Current mode:** A
 
-> Phase 1's log is in `Plans/archive/` alongside its plan; `PHASE2_RESULT.md`
-> is the self-contained result document for ROADMAP Phase 1. This file
-> covers ROADMAP Phase 1.5 only.
+> Phase 1.5's log was archived to `Plans/archive/PROGRESS-phase1_5.md`
+> rather than overwritten. This file covers ROADMAP Phase 1.75 only, per
+> `PLAN.md`.
 
 ## Log
 
-### 2026-09-20T04:00:00+08:00 — Pre-flight: recovering an orphaned module
-An interrupted earlier session had left `crates/core/src/font.rs` (783
-lines) uncommitted and broken: the suite reported 60 tests instead of 170,
-one failure and one hang. Triage found two genuine bugs, **both caught by
-the file's own tests**, so the module was fixed rather than discarded:
+### 2026-09-22T00:15:00+08:00 — Session start
+Design intake was completed before execution: the maintainer's hand-drawn
+sketch (`Pixel CAD UI Draft 1.pdf`) was rendered to a readable image, and
+their written supplement was preserved verbatim. Three design documents now
+exist and are the source of truth for this phase:
 
-1. `GLYPHS_5X7` was a `const`, not a `static`. A `const` is substituted at
-   every use site, so each `&GLYPHS_5X7[i]` borrowed a freshly materialised
-   temporary: two lookups of the same character returned different
-   addresses and the 665-byte table was duplicated into every caller.
-2. `rasterize` clamped `scale` only at the lower bound, so `scale =
-   u32::MAX` was not slow but non-terminating (~10^19 iterations). Added
-   `MAX_SCALE = 64`, applied identically in `measure` and `rasterize` so
-   the two can never disagree about what will appear on screen.
+- `docs/design/pixelcad-ui-draft-1.md` — maintainer's spec, verbatim
+- `docs/design/pixelcad-ui-draft-1.png` — rotated, readable sketch render
+- `docs/design/ui-redesign-spec.md` — every sketched control classified
+  LIVE / PARTIAL / WIP, cross-checked against `crates/core`'s actual
+  command set rather than assumed
 
-The one test asserting the old saturating contract was replaced with two
-regression tests (clamp behaviour, glyph-lookup identity). 21 font tests
-pass. Commit `6a772ac`.
+Two engineering risks were retired before planning, not during execution:
+`slint::Window::is_fullscreen()`/`set_fullscreen()` was confirmed to exist
+in Slint 1.8's Rust API (docs.rs), and `TabWidget` was confirmed present in
+1.8's std-widgets. The windowed/fullscreen distinction the maintainer asked
+for is therefore backed by a real platform API, not simulated.
 
-### 2026-09-20T04:10:00+08:00 — Task 1 complete (bootstrap)
-- `PLAN.md` written for Phase 1.5, scoped to the **P1 tier only** of the
-  maintainer's Paint feature matrix, with every deferred P1 row given an
-  explicit reason rather than being dropped silently.
-- `ROADMAP.md` gained a Phase 1.5 entry (inserted before Phase 2, because
-  this completes the Drawing MVP rather than starting the Concept System).
-- Mode used: A.
+### 2026-09-22T00:40:00+08:00 — Task 1 complete (design tokens + icons)
+- **`docs/design/DESIGN_SYSTEM.md`**: one visual identity shared by both
+  chrome trees — dark (default) and light palettes, type scale, 4px grid,
+  state treatments, and the per-platform structural difference.
+- **Three subject-grounded decisions recorded with their justification**,
+  so later sessions don't "fix" them into generic defaults:
+  1. Zero corner radius on canvas-adjacent chrome — rounded chrome
+     contradicts a pixel-exactness product. Radius survives only on modal
+     overlays, which float above the drawing surface.
+  2. Monospace confined to live numeric readouts — proportional digits make
+     a live cursor-coordinate readout jitter as the pointer moves. This is
+     the functional reason; monospace is *not* used for ordinary labels.
+  3. **Dashed borders mark WIP controls.** In a drafting tool a dashed line
+     already means "construction geometry — drawn, not built," so the large
+     number of sketched-but-unimplemented controls reads correctly to this
+     audience. `wip` amber is held far from `accent` cyan in hue so a WIP
+     control can never be misread as the active one.
+- **60 Lucide icons vendored** (`crates/app/ui/icons/`, ISC, license text
+  included). All 60 downloaded and verified 200 in one pass; zero failures.
+- **One non-obvious fix applied at vendor time:** Lucide ships
+  `stroke="currentColor"`, which Slint's SVG renderer has no context to
+  resolve — the icons would have rendered invisibly. Rewrote it to
+  `#000000` across all 60 files so each icon is a deterministic mask, then
+  tinted at use-site via Slint's `colorize`. This is what lets one icon
+  file serve dark, light, active, inactive and WIP states.
+- Recorded in `BACKLOG.md` (Task 8): a bespoke pixel-grid icon set on the
+  same 16px grid as the canvas would suit this product better than a
+  general-purpose stroke set, but is polish, not a blocker.
+- Mode used: A. Deviations from `PLAN.md`: none.
+- Files modified: `docs/design/DESIGN_SYSTEM.md` (new),
+  `crates/app/ui/icons/*.svg` (60 new), `crates/app/ui/icons/LICENSE-lucide.txt` (new).
 
-### 2026-09-20T04:40:00+08:00 — Tasks 2-5 complete (core)
-- **New module `selection.rs`.** `SelectionRect` became `Selection`: a
-  bounding box plus an *optional* per-cell coverage mask. Lasso and
-  rectangle are now one concept rather than two parallel ones. Masks
-  normalise (an all-covered mask compares equal to the plain rectangle), so
-  `PartialEq` means "selects the same cells" rather than "was built the
-  same way".
-- **A real semantic decision in polygon scan-conversion.** Pure even-odd
-  filling follows the top-left rule and drops the bottom and right
-  boundary — correct for *rendering* a polygon, wrong for *selecting* one,
-  because a lasso traced around a square would fail to select the pixels
-  the user traced over. `from_polygon` therefore fills the interior *and*
-  stamps the outline with Bresenham, making the boundary inclusive. A test
-  pins the square case at 16 cells, not 9.
-- **16 new commands:** `select.all`, `select.lasso`,
-  `selection.{delete,move,flip,rotate,scale}`, `canvas.{crop,resize}`,
-  `layer.{duplicate,merge}`, `ellipse.draw`, `polygon.draw`, `arrow.draw`,
-  `polyline.draw`, `text.draw`.
-- **Three extended commands, all backward compatible:** `brush.stroke`
-  gained `shape=`, `rect.draw` gained `radius=`, `fill.bucket` gained
-  `tolerance=`. Each is optional and defaults to the Phase 1 behaviour,
-  which is exactly why `ship.pxc` and `blueprint.pxcproj` still hash to
-  `bde0086…232` and `abdf81e…f1a`.
-- **Geometry is integer-only throughout**: a 91-entry fixed-point sine
-  table for `polygon.draw`, an integer square root for `arrow.draw`, and a
-  row-scanning midpoint ellipse. `f64::sin` cannot promise bit-identical
-  results across targets; a table can.
-- **`selection.move` lifts before it clears.** Clearing first would make a
-  one-pixel nudge erase the pixels it had just written — a test
-  (`ac6_an_overlapping_nudge_does_not_smear`) pins this.
-- 39 behavioural tests added in `crates/core/tests/paint_parity.rs`, all
-  passing on the first run. Commits `1da8e94`, plus the test commit.
+### 2026-09-22T01:00:00+08:00 — Task 2 complete (settings + platform detection)
+- **`crates/app/src/settings.rs`**, deliberately window-free so it is
+  testable without a display. File I/O is split from path resolution
+  (`load_from`/`save_to` take an explicit path), so no test can touch the
+  real user's config directory.
+- `directories` is used instead of a hard-coded `~/.config`, which is
+  simply the wrong location on macOS — one of this phase's two targets.
+- **Three deliberate robustness decisions**, each pinned by a test:
+  1. `UiStyle::Auto` is stored *as* `Auto`, not as the platform it resolved
+     to, so a config synced to another machine re-resolves there. A
+     regression test asserts the literal `ui-style = "auto"` on disk.
+  2. A corrupt or partial file never blocks startup: it yields defaults
+     plus a `LoadOutcome` explaining why, and `#[serde(default)]` means a
+     file written by an older build still loads once fields are added.
+  3. `sanitize()` repairs out-of-range values rather than rejecting the
+     file — a hand-edited config must not be able to produce a 0px icon or
+     a 1×1 default canvas.
+- Windows has no chrome of its own by design (maintainer: Windows users run
+  the Linux build under WSL); it resolves to the Linux chrome and sets
+  `windows_fallback`, which Task 7's first-run dialog uses to recommend WSL.
+- 10 unit tests, all passing.
 
-### 2026-09-20T05:05:00+08:00 — Task 6 complete (GUI)
-- 12 tools (adds ellipse, polyline, arrow, text, lasso); internal clipboard
-  with cut / copy / copy-composite / paste / duplicate; select-all; delete;
-  arrow-key nudge; flip / rotate / crop; brush-shape toggle; fill
-  tolerance; stroke opacity; recent colours; grid toggle; zoom fit and 1:1;
-  canvas resize and selection scale; layer duplicate / merge / raise /
-  lower.
-- **A real bug the new tests caught:** `image.import` is selection-clipped
-  like every other write, so pasting while an old marquee was still active
-  silently discarded everything outside it. `paste_at` now emits
-  `select.rect` *before* `image.import`, which makes the clip a no-op and
-  leaves the pasted region selected — which is what the user wants to drag
-  next anyway.
-- Clipboard content is deliberately session state and never enters the
-  command log (copying mutates nothing). The *paste* is recorded, so a
-  session still replays exactly.
-- 12 new headless GUI tests. Commit `251c188`.
-- Mode used: A. Two Slint-specific corrections were needed, both caught by
-  the build: `opacity` is a reserved element property (renamed to
-  `stroke-opacity`), and percentages auto-convert only on size properties.
+### 2026-09-22T01:30:00+08:00 — Task 3 complete (component split, pure refactor)
+- Extracted `common/canvas.slint` (`CanvasArea`) and
+  `common/layers_panel.slint` (`LayersPanel`), added `common/theme.slint`
+  (tokens as code), `common/types.slint` (`LayerRow`), and
+  `common/wip.slint` (the WIP primitive + a `DashedBorder`, since Slint has
+  no `border-style`).
+- Verified as a true regression-only change: 284 tests passed, i.e. the 274
+  Phase 1.5 baseline plus exactly the 10 new settings tests, with all 66
+  pre-existing GUI tests untouched in content.
 
-### 2026-09-20T05:30:00+08:00 — Task 7 complete (sample, docs, close-out)
-- `docs/samples/paint_parity.pxcproj`: a 160x120 four-layer tool sampler
-  (Sheet / Shapes / Transformed / Labels) exercising every new command.
-  Renders deterministically to sha256 `c056856314cd3b45…`. Visually checked
-  once via an ASCII-luminance dump of the decoded PNG.
-- 7 tests assert the sampler keeps using the commands it exists to
-  demonstrate, uses the new *optional fields* rather than only their
-  defaults, leaves no stale selection active, and puts ink on every layer.
-- `README.md`: the full grammar including all 35 commands, the optional
-  fields and their defaults, the expanded shortcut table, and the note on
-  replace-vs-blend opacity.
-- `BACKLOG.md` rewritten: the 8 deferred **P1** rows each with a reason,
-  plus the P2–P4 tiers recorded so they are not rediscovered from scratch.
+### 2026-09-22T02:10:00+08:00 — Tasks 4 and 5 complete (Home toolbar + Linux chrome)
+- `common/icons.slint`, `common/controls.slint` (`IconButton`,
+  `ChromeButton`, `ToolButton`, dividers, `ToolGroup`, `Readout`),
+  `common/home_toolbar.slint`, and `linux/chrome.slint` — the full stacked
+  band layout from the sketch (Title → ribbon tabs → contextual toolbar →
+  file tabs → main → style → secondary → tail).
+- `main.slint` is now only the Rust contract plus a chrome switch on
+  `ui-style`; all visible structure moved into the chrome trees.
+- The 12 tools render from the `tool-labels` model (not hard-coded) so the
+  toolbar cannot drift from `Tool::ALL`, while still being split into the
+  sketch's three visual groups.
+- Deviation from PLAN.md: Tasks 4 and 5 were verified together rather than
+  separately, because `HomeToolbar` has no consumer until a chrome tree
+  exists. No scope change.
 
-## Acceptance Criteria Results
+### 2026-09-22T02:05:00+08:00 — Mode B pivot on Task 5 (attempt 3)
+- **Failed approach:** assuming the headless tests' element lookups only
+  needed their component prefix renamed (`AppWindow::x` → `LinuxChrome::x`).
+  Two successive attempts (renaming prefixes, then making the controls
+  inherit `Rectangle` so their ids survive optimisation) both left 9 GUI
+  tests failing with "no element found".
+- **Pivot:** stopped guessing the naming scheme and wrote a throwaway probe
+  test that enumerated what the element tree actually contains.
+- **Root cause, and it was not naming at all:** `AppWindow::new()` leaves
+  the window with no size, and Slint only assigns geometry during layout,
+  so in the denser redesigned chrome most controls stayed 0×0 and were
+  absent from the searched tree. The old flat toolbar happened to survive
+  this; the new layout does not. Adding
+  `window().set_size(1600×1000)` to the shared test helper fixed 8 of the 9
+  failures outright, and confirmed the renamed element ids were correct all
+  along.
+- **Second, smaller finding from the same probe:** a Slint `Text` element
+  takes an implicit `accessible-label` equal to its text, so the "Brush"
+  tool-group caption collided with the "Brush" *tool* button in
+  label-based lookups. The group is now titled "Brush options", which is
+  also the more accurate name.
+- Only one test needed rewriting rather than re-pointing:
+  `the_tool_buttons_select_tools` indexed tool buttons positionally, which
+  the new visual grouping invalidates. It now locates the Fill button by
+  accessible label — the same assertion, independent of layout order — and
+  a companion test asserts all 12 tools carry a unique accessible label.
+- 285 tests pass, 0 failures.
 
-| # | Result | Evidence |
-|---|---|---|
-| AC1 | **PASS** | `cargo build --workspace` → `Finished dev profile`, 0 errors, **0 warnings** |
-| AC2 | **PASS** | `cargo test --workspace` → **274 passed, 0 failed** (target was ≥ 260; Phase 1 baseline 191) |
-| AC3 | **PASS** | `cargo tree -p pixelcad-core` → only `thiserror` + its proc-macro chain. Both new core modules (`selection.rs`, and the recovered `font.rs`) are dependency-free by design |
-| AC4 | **PASS** | `ship.pxc` → `bde008684f838437…`, `blueprint.pxcproj` → `abdf81edb8e8c52f…` — both unchanged from Phase 1 |
-| AC5 | **PASS** | `ac5_a_lasso_selects_a_non_rectangular_region`, `ac5_drawing_through_a_lasso_is_clipped_to_its_shape` |
-| AC6 | **PASS** | `ac6_selection_move_carries_the_pixels_and_the_marquee`, `ac6_an_overlapping_nudge_does_not_smear`, `moving_a_lasso_selection_moves_only_its_masked_pixels` |
-| AC7 | **PASS** | `ac7_flipping_twice_is_the_identity`, `ac7_four_quarter_turns_are_the_identity`, `rotate_90_transposes_a_non_square_selection` |
-| AC8 | **PASS** | `cut_copy_and_paste_round_trip_through_the_toolbar` — cut then paste elsewhere reproduces the pixels and empties the source |
-| AC9 | **PASS** | `ac9_fill_tolerance_spreads_across_near_colours_and_stops_outside_it` |
-| AC10 | **PASS** | `ac10_a_round_brush_is_not_a_square_one` — 25 px square vs fewer for the disc, corners empty |
-| AC11 | **PASS** | `ac11_*` for ellipse (hollow vs filled, plus symmetry), rounded rectangle, polygon, arrow, polyline |
-| AC12 | **PASS** | `ac12_text_stamps_glyphs_that_match_the_font_table` compares against `font::rasterize` directly |
-| AC13 | **PASS** | `ac13_crop_and_resize_run_through_the_engine_and_clear_the_selection`, plus 8 `document.rs` tests |
-| AC14 | **PASS** | `ac14_layer_duplicate_and_merge_through_the_engine` — merging is asserted to be *visually invisible* |
-| AC15 | **PASS** | `every_command_variant_is_covered_by_the_round_trip_test` still fail-closed at `VARIANT_COUNT = 35` |
-| AC16 | **PASS** | `ac16_*` tests for absent `shape`, `radius` and `tolerance`; AC4 is the end-to-end proof |
-| AC17 | **PASS** | 12 new headless GUI tests (select-all, delete, nudge, cut/copy/paste, copy-composite, duplicate/merge, flip/rotate/crop, grid and zoom presets, all 12 tool shortcuts, recent colours, text, lasso) |
-| AC18 | **PASS** | `docs/samples/paint_parity.pxcproj`, 7 tests, byte-identical across runs |
-| AC19 | **PASS** | `README.md` documents all 35 commands, optional-field defaults, and the full shortcut table |
+### 2026-09-22T03:05:00+08:00 — Task 6 complete (macOS chrome + fullscreen difference)
+- `macos/chrome.slint`: in-content Head bar (native title bar untouched, so
+  the traffic lights stay where macOS puts them), `SecondaryControls`
+  (Save/Undo/Redo/Files), an expandable Files menu with Open/Save live and
+  New/Export/Recent as WIP, the 8-entry vertical tab rail, and the
+  bottom-right zoom cluster.
+- **The windowed/fullscreen difference is real, not cosmetic.** Rust's
+  `fullscreen-toggled` callback flips `slint::Window::set_fullscreen` and
+  then mirrors `is_fullscreen()` — the *queried* state, not the requested
+  one — back into the `is-fullscreen` property. A window manager that
+  refuses the request therefore cannot desynchronise the UI. Windowed
+  merges Secondary into Head; fullscreen splits it onto its own row and
+  reveals a per-tab pop-out affordance (itself WIP, since real
+  multi-window support does not exist).
+- Slint requires components to be declared before first use in a file;
+  the two helper components had to move above `MacOsChrome`.
+- 4 new GUI tests: chrome switching, the vertical tab rail, the fullscreen
+  restructure (asserted in both directions, so it is a live binding rather
+  than a one-way branch), and that the toggle drives the real window state.
+
+### 2026-09-22T03:00:00+08:00 — Two layout bugs found by looking at it
+- The structural tests all passed while the app still looked wrong, so the
+  binary was run and screenshotted. Two defects that no assertion covered:
+  1. **The chrome did not fill the window.** A `FocusScope` is not a
+     layout, so the chrome collapsed to its preferred size and floated in
+     the middle of the window. Fixed with explicit `width/height: 100%` on
+     the focus scope and both chrome trees.
+  2. **The Home toolbar is wider than a small window** and was silently
+     clipping the Colour and AI groups off the right-hand end. On macOS it
+     was worse: the toolbar's minimum width propagated up the layout and
+     squeezed the vertical tab rail to zero width, which is why those tabs
+     were also missing from the element tree.
+- **`ScrollView` is the wrong fix and cost an attempt:** wrapping the
+  toolbar in one made 10 GUI tests fail, because its clipped content drops
+  out of the searchable element tree. `Flickable` with an explicit
+  `viewport-width` scrolls the toolbar *and* keeps every control
+  discoverable, so the toolbar is now horizontally scrollable on both
+  platforms with all tests green.
+- Both chrome trees were then visually confirmed against the sketch,
+  band by band, in a real window.
+- 289 tests pass, 0 failures.
+
+### 2026-09-22T04:20:00+08:00 — Task 7 complete (first-run dialog, Settings page, theming)
+
+**Scope addition, requested mid-execution by the maintainer:** the Settings
+page also had to offer colour scheme, colour design and text style for both
+windows. `PLAN.md` Task 7 and a new AC12 were amended to record this before
+implementing it.
+
+- **`Theme` became two orthogonal axes instead of a dark/light flag.**
+  `scheme` (dark / light / high-contrast) decides how light the chrome is;
+  `design` (cyanotype / graphite / amber / phosphor) decides the hue family.
+  Four palette definitions therefore cover twelve appearances, rather than
+  twelve hand-maintained themes that would drift apart.
+- The four designs are grounded in the subject, not arbitrary hues:
+  cyanotype (blueprint), graphite (pencil lead), amber (drafting lamp),
+  phosphor (green CRT, for the command-line heritage).
+- **One rule worth keeping:** the WIP marker is amber everywhere *except*
+  under the Amber design, where it becomes violet. A warm WIP dot on a warm
+  accent reads as "active", which is exactly the confusion the WIP
+  treatment exists to prevent.
+- **Text style** is a named step (compact / normal / comfortable), not a
+  free number, so it cannot be set to something unreadable. The scale
+  multiplies text sizes *and* row heights, so larger text grows its
+  container instead of clipping inside it. A monospace-labels switch is
+  also offered; numeric readouts were already always monospace.
+- `settings/settings_panel.slint` (Basic / Style / Layout tabs) and
+  `common/first_run_dialog.slint`, both as in-window modal overlays
+  declared once above either chrome tree.
+- **Tabs are hand-built from `ChromeButton`, not `TabWidget`**, for the
+  same reason `ScrollView` was rejected in Task 6: those widgets keep
+  inactive/clipped content out of the searchable element tree, which would
+  make the settings page untestable headlessly.
+- **No Apply button.** Every control writes its property and raises one
+  `changed()`; Rust persists, re-applies the theme, and writes the
+  *sanitised* values back into the form, so the visible UI and the saved
+  file cannot disagree, and a rejected value cannot stay on screen.
+- `collect_settings` keeps the previous value when a numeric field will not
+  parse: the user is mid-edit, and a half-typed number must not overwrite
+  what they had.
+- **Accepting the detected platform stores `Auto`, not the resolved
+  platform** — so the same config still follows the OS if it is later used
+  on another machine. Explicitly picking Linux or macOS pins it. Both paths
+  are pinned by tests.
+- `wire_settings` takes its save function as a parameter so the headless
+  tests capture settings in memory instead of writing to the real user
+  config directory.
+- 9 new tests: panel open/close, all three theming axes applying *and*
+  persisting, accent override and restore, invalid accent discarded without
+  losing a valid sibling change, live chrome swap without restart, first-run
+  answered once (both the "detected" and explicit paths), and a control
+  inventory test that stands in for eyeballing the overlay.
+- Warnings cleaned to zero: dropped two speculative `ALL` constants and
+  migrated `viewport-width/height` to Slint 1.8's `content-width/height`.
+- 297 tests pass, 0 failures, 0 warnings. `crates/core` and `crates/cli`
+  still show no diff.
+
+### 2026-09-22T04:05:00+08:00 — Note on visual verification
+The Linux and macOS chrome trees, and the Amber colour design, were each
+confirmed in a real window. Verification of the Settings overlay was
+**not** done visually: capturing it required a full-screen grab, and one
+such grab caught an unrelated browser window belonging to the maintainer.
+Those captures were deleted immediately and the practice was stopped;
+window-only capture needs Accessibility permission this session does not
+have. The overlay is instead covered by
+`the_settings_page_shows_every_documented_control`, which asserts every
+documented row and option is present, so a dropped control fails the suite
+rather than shipping silently.
 
 ## Current Blockers
 
 None.
 
-## Backlog
+## Backlog (out-of-scope items discovered during execution)
 
-See `BACKLOG.md`. Eight **P1** rows are deferred with explicit reasons; the
-three most likely to be missed are anti-aliasing (blocked on a product
-decision, not effort), OS-clipboard interop (needs a new dependency), and
-Shift-constrained drawing (needs modifier state threaded from Slint).
+- Bespoke pixel-grid icon set (found during Task 1) — to be filed in
+  `BACKLOG.md` during Task 8.
 
 ## Resumption
 
-Nothing to resume — Phase 1.5 is complete. A new session should start at
-`ROADMAP.md`'s Session Protocol step 1 for Phase 2 ("Concept System"),
-reading `PHASE2_RESULT.md` Section 8 and then `BACKLOG.md`.
+Task 8 — ROADMAP/BACKLOG updates and the future-phase mapping document
+(`docs/design/ui-roadmap-mapping.md`), then Task 9 (full regression and
+close-out). Nothing is half-finished: 297 tests pass with 0 warnings.
+
+<details>
+<summary>Superseded resumption note for Task 7</summary>
+
+Task 7 — First-run dialog and Settings page. Next step: write
+`common/first_run_dialog.slint` (modal overlay: "Detected <OS> — use the
+matching interface style?", plus the WSL note when
+`PlatformDetection::windows_fallback`) and `settings/settings_panel.slint`
+(`TabWidget` with Basic and Style tabs, plus the disabled Linux-only
+"Layout — coming later" row), then wire both into `main.rs`: show the
+dialog when `!first_run_completed`, persist on answer, and make
+`settings-clicked` open the panel. `apply_settings` and `wire_fullscreen`
+already exist in `main.rs`; `settings::load` is already called at startup,
+so only the dialog/panel UI and the save-on-change path remain.
+
+Last stable state: 289 tests passing, both chrome trees complete and
+visually verified in a real window, `crates/core` and `crates/cli`
+untouched. Tasks 8 (ROADMAP/BACKLOG + future-phase mapping) and 9 (full
+regression and close-out) not started.
+</details>
+
+### 2026-09-22T05:10:00+08:00 — Tasks 8 and 9 complete (mapping, docs, close-out)
+
+**Maintainer correction applied before close-out:** the macOS tab icons
+belong in a **horizontal strip along the bottom edge** whose panels expand
+**vertically upward** on click, not in a left-hand vertical rail. The rail
+was rebuilt as `TabDockIcon` dock icons + a `tab-panel` overlay above the
+bottom bar (click to expand, click again or the panel's close button to
+collapse, click another icon to switch content in place). The spec doc's
+macOS section and README now describe the corrected arrangement, and a new
+test covers expand / switch / collapse / re-expand.
+
+- **Task 8:** `docs/design/ui-roadmap-mapping.md` written — 30 rows, every
+  WIP control assigned to a phase, a tagged BACKLOG row, or the new
+  ROADMAP cross-phase item, with zero unassigned. `ROADMAP.md` gained the
+  Phase 1.75 entry (COMPLETE) and the `Cross-phase — Windowing & panel
+  layout` line item (DEFERRED), which is where the Linux movable-panel
+  request lives per the maintainer's instruction. `BACKLOG.md` gained a
+  Phase 1.75 deferrals section with reasons, matching the existing format.
+- **Task 9:** `README.md` updated (window layouts, settings, theming; stale
+  button names corrected). Final sweep: build 0 warnings, **298 tests
+  passed / 0 failed**, `crates/core` and `crates/cli` show no diff.
+
+AUTOPILOT: Session complete.
+
+Tasks completed:     9 / 9
+Acceptance criteria: 12 / 12 passed (AC1 build clean; AC2 298 > 274 tests;
+                      AC3 core/cli untouched; AC4 first-run once + persisted;
+                      AC5/AC6 chrome trees render with LIVE wired and WIP
+                      disabled; AC7 fullscreen difference real and testable;
+                      AC8 settings persist + live style switch; AC9/AC11
+                      roadmap/backlog + mapping doc; AC10 design system doc;
+                      AC12 scheme/design/text theming live + persisted)
+Modes used:           A (1, 2, 3, 4, 6, 7, 8, 9), B (5, one pivot: element
+                      lookup diagnosis)
+Files modified:       PLAN.md, PROGRESS.md, ROADMAP.md, BACKLOG.md, README.md,
+                      Cargo.lock, crates/app/Cargo.toml, crates/app/src/main.rs,
+                      crates/app/src/settings.rs (new), crates/app/ui/** (new)
+Backlog items:        11 — see BACKLOG.md, Phase 1.75 deferrals
+Regressions found:    none

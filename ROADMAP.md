@@ -60,6 +60,19 @@ zoom, recent colours.
 **Exit criterion:** anything a user can do in Microsoft Paint they can do in
 PixelCAD, and can replay from a script. P2–P4 tiers stay in `BACKLOG.md`.
 
+### Phase 1.75 — Platform-Aware UI Shell & Settings  [COMPLETE]
+The maintainer-designed window chrome for Linux and macOS (sketch +
+spec in `docs/design/`): platform detection with a one-time confirmation
+dialog, a persisted Settings page (Basic / Style / Layout), colour scheme
+× colour design × text style theming, a real windowed/fullscreen layout
+difference, and every sketched-but-unimplemented feature rendered visibly
+as a disabled WIP control. The full LIVE/PARTIAL/WIP classification lives
+in `docs/design/ui-redesign-spec.md`, and the assignment of each WIP item
+to a future phase lives in `docs/design/ui-roadmap-mapping.md`.
+**Exit criterion:** both chrome trees render from one shared component set;
+all 297 tests pass with zero warnings; `crates/core` and `crates/cli` are
+untouched.
+
 ### Phase 2 — Concept System                    [PENDING]
 Vector shapes, guides, snapping, grid/symmetry tools, annotations, command
 palette, textual command editor, macros, local automation API.
@@ -99,10 +112,31 @@ No Windows-specific code outside the adapter layer.
 **Exit criterion:** core drawing workflow passes the determinism test on
 Windows; unsupported features degrade cleanly per the invariants.
 
+### Phase 7 — Colorful Update                  [PENDING]
+A Minecraft 1.12 "World of Color"-style color-system update: a systematic
+16-color (and beyond) palette architecture, per-project custom palettes,
+full color pickers (RGB/HSV/hex), color-adjustment and recolor commands
+(hue/saturation/value shift, replace-by-color), gradients and dithering, and
+named color libraries consistent across GUI, CLI, and scripts.
+**Exit criterion:** every color a user can choose is expressible and
+replayable as a command; a whole design's color scheme can be transformed
+from a single script and survives save/reload byte-identically.
+
 ### Cross-phase — Linux ARM64 validation        [DEFERRED]
 Activates when a reference Linux ARM64 machine (or UTM VM) exists. Adds CI
 and the determinism criterion across both platforms. Pre-requisite for
 Phase 5b.
+
+### Cross-phase — Windowing & panel layout      [DEFERRED]
+The chrome customisation work Phase 1.75 deliberately did not build:
+Linux users can move dockable panels and toolbars to new locations
+("box" arrangement, GIMP/Krita-style, via Settings → Layout); macOS users
+can add or remove items but not reposition them; both platforms gain real
+multi-window support so the macOS fullscreen tab pop-out and the
+Secondary-tools miniwindow toolbox stop being WIP. See
+`docs/design/ui-roadmap-mapping.md` rows 20–24.
+**Exit criterion:** a panel layout can be changed, persisted and restored
+without restarting the document session.
 
 ---
 
@@ -122,9 +156,11 @@ Phase 5b.
 | 0 | COMPLETE | 2026-09-19 | 2026-09-19 |
 | 1 | COMPLETE | 2026-09-19 | 2026-09-20 |
 | 1.5 | COMPLETE | 2026-09-20 | 2026-09-20 |
+| 1.75 | COMPLETE | 2026-09-22 | 2026-09-22 |
 | 2 | PENDING | — | — |
 | 3 | PENDING | — | — |
 | 4 | PENDING | — | — |
 | 5 (Metal) | PENDING | — | — |
 | 5b (Vulkan) | DEFERRED | — | — |
 | 6 (Windows) | DEFERRED | — | — |
+| 7 (Colorful) | PENDING | — | — |

@@ -85,3 +85,46 @@ exact dimensions, repeat transform, multi-representation clipboard,
 selection *modes* (object / node / edge-face / layer / AI), layer locking,
 groups, typed layers, and the AI features (object select, generative fill
 and erase, background removal, Image Creator).
+
+## Phase 1.75 (UI shell) deferrals
+
+New WIP controls surfaced by the redesign. Destination tags reference
+`docs/design/ui-roadmap-mapping.md`, which is the single source of truth;
+the numbers below are that table's row numbers.
+
+- [Phase 1.75] **Bespoke pixel-grid icon set (mapping #28)** — the vendored
+  Lucide set is a general-purpose stroke set; a set drawn on the same 16px
+  grid as the canvas would suit this product better. General polish, not a
+  blocker.
+- [Phase 1.75] **macOS native unified title bar (mapping #27)** — the
+  sketch's macOS Head bar implies traffic-light-integrated custom chrome;
+  Slint 1.8 exposes no portable API for it, so Phase 1.75 kept the native
+  title bar. General cosmetic polish.
+- [Phase 1.75] **Linux movable/dockable panels + macOS add/reduce items
+  (mapping #21–24)** — tracked as the `Cross-phase — Windowing & panel
+  layout` ROADMAP line item, not here, per the maintainer's request that
+  this live in `ROADMAP.md`.
+- [Phase 1.75] **Undo-to / redo-to a point (mapping #5)** — RMB on the
+  undo/redo icons; needs history-list UI and addressing into the undo
+  stack, which fit Phase 2's textual command model.
+- [Phase 1.75] **Copy element under the cursor with nothing selected
+  (mapping #6)** — needs hit-testing, which arrives with Phase 2's vector
+  model.
+- [Phase 1.75] **Multi-document file tabs and the macOS file tree
+  (mapping #16)** — no phase currently covers multi-document sessions;
+  the UI renders one real tab/tree entry and WIP affordances.
+- [Phase 1.75] **Interactive move/rotate handles (mapping #17)** — fixed
+  commands and nudging exist; drag-handles with live preview are the same
+  interaction-design job as the deferred marquee handles from Phase 1.5.
+- [Phase 1.75] **Canvas style / Media bay / Find / unified search
+  (mapping #13–15, #14, #4)** — see the mapping table for the per-item
+  destination; all render as WIP dropdowns listing their sketch sub-items.
+- [Phase 1.75] **In-GUI command line and AI features (mapping #2, #1)** —
+  explicitly Phase 2 (command palette / textual command editor) and
+  Phase 4 (AI) respectively; the UI placeholders exist and are labelled.
+- [Phase 1.75] **macOS "Master management" (mapping #26)** — the spec's
+  meaning is unconfirmed; the placeholder is preserved until the
+  maintainer defines it.
+- [Phase 1.75] **Autosave timer (mapping #30)** — the setting field ships;
+  actually saving on the timer is UI-side work that becomes meaningful
+  once file dialogs land (see the Phase 1 entry below).
