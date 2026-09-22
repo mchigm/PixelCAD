@@ -11,3 +11,7 @@
 /target
 out.png
 *.pxcproj.tmp
+
+# Default scratch paths written by the GUI while testing
+/drawing.pxcproj
+/session.pxc
