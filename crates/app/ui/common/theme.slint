@@ -1,0 +1,117 @@
+// Design tokens. The human-readable source of truth is
+// docs/design/DESIGN_SYSTEM.md; this file is its machine-readable form.
+// Both chrome trees import it, so a token change lands on Linux and macOS
+// at once.
+//
+// Three user-facing axes, all persisted in settings.toml and all applying
+// live to whichever chrome tree is showing:
+//
+//   scheme  - dark | light | high-contrast   (lightness and contrast)
+//   design  - cyanotype | graphite | amber | phosphor   (hue family)
+//   text    - type scale, plus optional monospace labels
+//
+// The scheme decides *how light* the surfaces are; the design decides
+// *what colour* they and the accent are. Keeping the two orthogonal means
+// four designs times three schemes without twelve hand-maintained themes.
+
+export global Theme {
+    // --- pushed from settings.rs ---
+    in property <string> scheme: "dark";
+    in property <string> design: "cyanotype";
+    /// Multiplies every text size. 0.92 compact / 1.0 normal / 1.15 comfortable.
+    in property <float> text-scale: 1.0;
+    /// Monospace UI labels — popular with CAD/CLI users. Numeric readouts
+    /// are always monospace regardless.
+    in property <bool> mono-labels: false;
+    /// A user-chosen accent that overrides the design's own.
+    /// `transparent` means "use the design's accent".
+    in property <color> accent-override: transparent;
+    in property <length> icon-size: 16px;
+
+    out property <bool> light: root.scheme == "light";
+    out property <bool> contrast: root.scheme == "high-contrast";
+
+    // ---------------------------------------------------------- surfaces
+    out property <color> surface-base:
+        root.design == "graphite" ? (root.light ? #F1F1EF : root.contrast ? #000000 : #14161A)
+        : root.design == "amber"  ? (root.light ? #F6F1E6 : root.contrast ? #000000 : #17120C)
+        : root.design == "phosphor" ? (root.light ? #ECF2EF : root.contrast ? #000000 : #0A1210)
+        : (root.light ? #EDF1F3 : root.contrast ? #000000 : #0F171C);
+
+    out property <color> surface-raised:
+        root.design == "graphite" ? (root.light ? #FFFFFF : root.contrast ? #0A0A0A : #1D2024)
+        : root.design == "amber"  ? (root.light ? #FFFDF8 : root.contrast ? #0C0A06 : #201A11)
+        : root.design == "phosphor" ? (root.light ? #FFFFFF : root.contrast ? #060A08 : #101A17)
+        : (root.light ? #FFFFFF : root.contrast ? #0A0A0A : #17232A);
+
+    out property <color> surface-sunken:
+        root.design == "graphite" ? (root.light ? #E2E2DF : root.contrast ? #000000 : #0E1013)
+        : root.design == "amber"  ? (root.light ? #E8E0CE : root.contrast ? #000000 : #100C07)
+        : root.design == "phosphor" ? (root.light ? #DBE6E1 : root.contrast ? #000000 : #060D0B)
+        : (root.light ? #DCE3E7 : root.contrast ? #000000 : #0A1115);
+
+    out property <color> line:
+        root.design == "graphite" ? (root.light ? #C9C9C4 : root.contrast ? #8A9099 : #31363C)
+        : root.design == "amber"  ? (root.light ? #D3C7AC : root.contrast ? #8A7550 : #3A2E1D)
+        : root.design == "phosphor" ? (root.light ? #BFD2C9 : root.contrast ? #6F9A8A : #1F3A31)
+        : (root.light ? #C2CFD6 : root.contrast ? #6F8A96 : #24343D);
+
+    // ------------------------------------------------------------- text
+    out property <color> text-primary:
+        root.contrast ? #FFFFFF
+        : root.design == "graphite" ? (root.light ? #1B1D20 : #E2E4E7)
+        : root.design == "amber"  ? (root.light ? #241C0E : #F0E2CC)
+        : root.design == "phosphor" ? (root.light ? #0F1E18 : #D6EDE4)
+        : (root.light ? #142026 : #DCE7EC);
+
+    out property <color> text-muted:
+        root.design == "graphite" ? (root.light ? #63676D : root.contrast ? #D2D6DA : #939AA3)
+        : root.design == "amber"  ? (root.light ? #6E6047 : root.contrast ? #E0CBA4 : #A8916E)
+        : root.design == "phosphor" ? (root.light ? #557065 : root.contrast ? #BFE5D5 : #7BA396)
+        : (root.light ? #5A6C76 : root.contrast ? #C8D8DF : #7E949F);
+
+    // ----------------------------------------------------------- accent
+    out property <color> design-accent:
+        root.design == "graphite" ? (root.light ? #4A5B6E : root.contrast ? #C7D4E2 : #8FA3B8)
+        : root.design == "amber"  ? (root.light ? #A4701A : root.contrast ? #FFC259 : #E0A33E)
+        : root.design == "phosphor" ? (root.light ? #17795A : root.contrast ? #5BFFB0 : #4FD99B)
+        : (root.light ? #1C6E96 : root.contrast ? #57C8FF : #3FA7D6);
+
+    out property <color> accent:
+        root.accent-override == transparent ? root.design-accent : root.accent-override;
+
+    out property <color> accent-quiet:
+        root.design == "graphite" ? (root.light ? #C3CFDB : root.contrast ? #3A4654 : #3C4A5A)
+        : root.design == "amber"  ? (root.light ? #EBD6A8 : root.contrast ? #5A4212 : #6A4E18)
+        : root.design == "phosphor" ? (root.light ? #A8DCC6 : root.contrast ? #0D4A33 : #1A5C42)
+        : (root.light ? #A9D3E6 : root.contrast ? #0A4A66 : #1E5A78);
+
+    // Held far from every design's accent in hue so a WIP control can never
+    // be misread as the active one. Amber's accent is itself warm, so that
+    // design gets a violet WIP marker instead.
+    out property <color> wip:
+        root.design == "amber" ? (root.light ? #7A4BA8 : #B98CE0)
+        : (root.light ? #8A6A20 : #B08A3E);
+
+    // ------------------------------------------------------- typography
+    out property <string> label-font: root.mono-labels ? "monospace" : "";
+
+    out property <length> text-label: 11px * root.text-scale;
+    out property <length> text-body: 13px * root.text-scale;
+    out property <length> text-title: 15px * root.text-scale;
+    out property <length> text-heading: 20px * root.text-scale;
+    out property <length> text-readout: 12px * root.text-scale;
+
+    // ------------------------------------------------ spacing and metrics
+    // 4px base grid.
+    out property <length> space-1: 4px;
+    out property <length> space-2: 8px;
+    out property <length> space-3: 12px;
+    out property <length> space-4: 16px;
+    out property <length> space-6: 24px;
+
+    // Rows grow with the type scale so larger text does not clip.
+    out property <length> row-toolbar: 32px * root.text-scale;
+    out property <length> row-tabs: 28px * root.text-scale;
+    out property <length> row-tail: 24px * root.text-scale;
+}

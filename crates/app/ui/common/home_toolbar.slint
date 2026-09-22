@@ -1,0 +1,404 @@
+// The "Home" tab toolbar from the sketch's Secondary1 row.
+//
+// Shared by both chrome trees: the macOS "Main" vertical tab is specified as
+// "Head from Linux UI", i.e. this exact component.
+//
+// Group layout follows the sketch: Paste with Cut/Copy stacked to its right;
+// Select with Default-select/Crop&Resize stacked to its right; Stationaries;
+// Brush; Shapes; Fill-Outline over Width; Colour & Tools; AI.
+//
+// The 12 real tools are rendered from the `tool-labels` model rather than
+// hard-coded, so the toolbar cannot drift out of sync with `Tool::ALL`.
+// They are split into three filtered loops for the sketch's visual grouping
+// while still producing exactly one `tool-btn` per tool.
+
+import { LineEdit } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Icons } from "icons.slint";
+import { IconButton, ChromeButton, ToolButton, VDivider, ToolGroup, Readout } from "controls.slint";
+import { WipButton } from "wip.slint";
+
+export component HomeToolbar {
+    in property <[string]> tool-labels;
+    in property <int> selected-tool;
+    in property <int> brush-size;
+    in property <string> brush-shape;
+    in property <int> tolerance;
+    in property <int> stroke-opacity;
+    in property <[color]> palette-colors;
+    in property <int> selected-index;
+    in property <[color]> recent-colors;
+    in property <bool> has-selection;
+    in property <bool> has-clipboard;
+    in-out property <string> swatch-hex;
+    in-out property <string> text-input;
+    in-out property <string> size-w;
+    in-out property <string> size-h;
+
+    callback tool-selected(int);
+    callback brush-size-changed(int);
+    callback brush-shape-toggled();
+    callback tolerance-changed(int);
+    callback stroke-opacity-changed(int);
+    callback palette-clicked(int);
+    callback recent-clicked(int);
+    callback swatch-applied(string);
+    callback cut-clicked();
+    callback copy-clicked();
+    callback copy-composite-clicked();
+    callback paste-clicked();
+    callback delete-clicked();
+    callback select-all-clicked();
+    callback selection-cleared();
+    callback crop-clicked();
+    callback rotate-clicked();
+    callback flip-clicked(string);
+    callback resize-canvas-clicked(string, string);
+    callback text-changed(string);
+
+    // Index -> icon. Mirrors `Tool::ALL` in controller.rs.
+    pure function tool-icon(i: int) -> image {
+        return i == 0 ? Icons.brush
+            : i == 1 ? Icons.eraser
+            : i == 2 ? Icons.fill
+            : i == 3 ? Icons.pipette
+            : i == 4 ? Icons.line
+            : i == 5 ? Icons.rect
+            : i == 6 ? Icons.ellipse
+            : i == 7 ? Icons.polyline
+            : i == 8 ? Icons.arrow
+            : i == 9 ? Icons.text
+            : i == 10 ? Icons.select
+            : Icons.lasso;
+    }
+
+    height: 72px;
+
+    Rectangle {
+        background: Theme.surface-raised;
+
+        HorizontalLayout {
+            padding-left: Theme.space-1;
+            padding-right: Theme.space-1;
+            padding-top: Theme.space-1;
+            padding-bottom: Theme.space-1;
+            spacing: Theme.space-2;
+            alignment: start;
+
+            // ---------------------------------------------- clipboard
+            ToolGroup {
+                title: "Clipboard";
+
+                paste-btn := IconButton {
+                    icon: Icons.paste;
+                    label: "Paste";
+                    enabled: root.has-clipboard;
+                    box: 40px;
+                    clicked => { root.paste-clicked(); }
+                }
+                VerticalLayout {
+                    spacing: 2px;
+                    cut-btn := IconButton {
+                        icon: Icons.cut;
+                        label: "Cut";
+                        enabled: root.has-selection;
+                        box: 19px;
+                        clicked => { root.cut-clicked(); }
+                    }
+                    copy-btn := IconButton {
+                        icon: Icons.copy;
+                        label: "Copy";
+                        box: 19px;
+                        clicked => { root.copy-clicked(); }
+                    }
+                }
+                copy-composite-btn := IconButton {
+                    icon: Icons.copy-plus;
+                    label: "Copy visible";
+                    clicked => { root.copy-composite-clicked(); }
+                }
+            }
+
+            VDivider { }
+
+            // ---------------------------------------------- selection
+            ToolGroup {
+                title: "Selection";
+
+                // Marquee + lasso come from the tool model so they stay in
+                // step with Tool::ALL.
+                for label[i] in root.tool-labels: HorizontalLayout {
+                    if i >= 10: ToolButton {
+                        icon: root.tool-icon(i);
+                        label: label;
+                        active: root.selected-tool == i;
+                        box: 40px;
+                        clicked => { root.tool-selected(i); }
+                    }
+                }
+                VerticalLayout {
+                    spacing: 2px;
+                    select-all-btn := IconButton {
+                        icon: Icons.select-default;
+                        label: "Select all";
+                        box: 19px;
+                        clicked => { root.select-all-clicked(); }
+                    }
+                    crop-btn := IconButton {
+                        icon: Icons.crop;
+                        label: "Crop to selection";
+                        enabled: root.has-selection;
+                        box: 19px;
+                        clicked => { root.crop-clicked(); }
+                    }
+                }
+                VerticalLayout {
+                    spacing: 2px;
+                    deselect-btn := IconButton {
+                        icon: Icons.close;
+                        label: "Clear selection";
+                        enabled: root.has-selection;
+                        box: 19px;
+                        clicked => { root.selection-cleared(); }
+                    }
+                    delete-btn := IconButton {
+                        icon: Icons.trash;
+                        label: "Delete selection";
+                        enabled: root.has-selection;
+                        box: 19px;
+                        clicked => { root.delete-clicked(); }
+                    }
+                }
+                VerticalLayout {
+                    spacing: 2px;
+                    flip-h-btn := IconButton {
+                        icon: Icons.scaling;
+                        label: "Flip horizontal";
+                        enabled: root.has-selection;
+                        box: 19px;
+                        clicked => { root.flip-clicked("horizontal"); }
+                    }
+                    rotate-btn := IconButton {
+                        icon: Icons.rotate;
+                        label: "Rotate 90";
+                        enabled: root.has-selection;
+                        box: 19px;
+                        clicked => { root.rotate-clicked(); }
+                    }
+                }
+            }
+
+            VDivider { }
+
+            // ------------------------------------------- stationaries
+            ToolGroup {
+                title: "Stationaries";
+
+                for label[i] in root.tool-labels: HorizontalLayout {
+                    if i <= 3 || i == 9: ToolButton {
+                        icon: root.tool-icon(i);
+                        label: label;
+                        active: root.selected-tool == i;
+                        box: 32px;
+                        clicked => { root.tool-selected(i); }
+                    }
+                }
+            }
+
+            VDivider { }
+
+            // -------------------------------------------------- brush
+            // Titled "Brush options" rather than "Brush" so the group
+            // caption cannot collide with the Brush *tool*: Slint gives a
+            // Text element an implicit accessible-label equal to its text.
+            ToolGroup {
+                title: "Brush options";
+
+                brush-shape-btn := ChromeButton {
+                    label: root.brush-shape;
+                    clicked => { root.brush-shape-toggled(); }
+                }
+                VerticalLayout {
+                    spacing: 2px;
+                    brush-up-btn := IconButton {
+                        icon: Icons.arrow-up;
+                        label: "Increase brush size";
+                        box: 19px;
+                        clicked => { root.brush-size-changed(root.brush-size + 1); }
+                    }
+                    brush-down-btn := IconButton {
+                        icon: Icons.arrow-down;
+                        label: "Decrease brush size";
+                        box: 19px;
+                        clicked => { root.brush-size-changed(root.brush-size - 1); }
+                    }
+                }
+                Readout { text: "w" + root.brush-size; }
+                WipButton {
+                    label: "Type";
+                    icon: Icons.pen;
+                    show-label: false;
+                }
+            }
+
+            VDivider { }
+
+            // ------------------------------------------------- shapes
+            ToolGroup {
+                title: "Shapes";
+
+                for label[i] in root.tool-labels: HorizontalLayout {
+                    if i >= 4 && i <= 8: ToolButton {
+                        icon: root.tool-icon(i);
+                        label: label;
+                        active: root.selected-tool == i;
+                        box: 32px;
+                        clicked => { root.tool-selected(i); }
+                    }
+                }
+                WipButton {
+                    label: "Polygon";
+                    icon: Icons.polygon;
+                    show-label: false;
+                }
+            }
+
+            VDivider { }
+
+            // ---------------------------------------- fill / outline
+            ToolGroup {
+                title: "Fill & width";
+
+                VerticalLayout {
+                    spacing: 2px;
+                    // The sketch's 1D vs 1.7/2/2.5-D face-and-outline model
+                    // belongs to the vector/CAD phases; only the raster fill
+                    // tolerance exists today.
+                    WipButton {
+                        label: "Fill / outline";
+                        icon: Icons.baseline;
+                        show-label: false;
+                        min-w: 19px;
+                    }
+                }
+                VerticalLayout {
+                    spacing: 2px;
+                    tol-up-btn := ChromeButton {
+                        label: "tol+";
+                        clicked => { root.tolerance-changed(root.tolerance + 8); }
+                    }
+                    tol-down-btn := ChromeButton {
+                        label: "tol-";
+                        clicked => { root.tolerance-changed(root.tolerance - 8); }
+                    }
+                }
+                VerticalLayout {
+                    spacing: 2px;
+                    op-up-btn := ChromeButton {
+                        label: "op+";
+                        clicked => { root.stroke-opacity-changed(root.stroke-opacity + 32); }
+                    }
+                    op-down-btn := ChromeButton {
+                        label: "op-";
+                        clicked => { root.stroke-opacity-changed(root.stroke-opacity - 32); }
+                    }
+                }
+                Readout { text: "t" + root.tolerance + "\no" + root.stroke-opacity; }
+            }
+
+            VDivider { }
+
+            // ------------------------------------------ colour & tools
+            ToolGroup {
+                title: "Colour & tools";
+
+                VerticalLayout {
+                    spacing: 2px;
+                    HorizontalLayout {
+                        spacing: 2px;
+                        for i in 8: Rectangle {
+                            width: 18px;
+                            height: 18px;
+                            background: root.palette-colors[i];
+                            border-width: root.selected-index == i ? 2px : 1px;
+                            border-color: root.selected-index == i ? Theme.accent : Theme.line;
+
+                            swatch-row1 := TouchArea {
+                                clicked => { root.palette-clicked(i); }
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 2px;
+                        for i in 8: Rectangle {
+                            width: 18px;
+                            height: 18px;
+                            background: root.palette-colors[i + 8];
+                            border-width: root.selected-index == (i + 8) ? 2px : 1px;
+                            border-color: root.selected-index == (i + 8) ? Theme.accent : Theme.line;
+
+                            swatch-row2 := TouchArea {
+                                clicked => { root.palette-clicked(i + 8); }
+                            }
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 2px;
+                        height: 14px;
+                        for c[i] in root.recent-colors: Rectangle {
+                            width: 14px;
+                            height: 14px;
+                            background: c;
+                            border-width: 1px;
+                            border-color: Theme.line;
+                            recent-swatch := TouchArea {
+                                clicked => { root.recent-clicked(i); }
+                            }
+                        }
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: 2px;
+                    hex-edit := LineEdit {
+                        text <=> root.swatch-hex;
+                        width: 76px;
+                        height: 22px;
+                    }
+                    apply-swatch-btn := ChromeButton {
+                        label: "Set colour";
+                        clicked => { root.swatch-applied(root.swatch-hex); }
+                    }
+                }
+
+                VerticalLayout {
+                    spacing: 2px;
+                    text-edit := LineEdit {
+                        text <=> root.text-input;
+                        width: 84px;
+                        height: 22px;
+                        edited => { root.text-changed(self.text); }
+                    }
+                    Text {
+                        text: "Text tool buffer";
+                        color: Theme.text-muted;
+                        font-size: Theme.text-label;
+                    }
+                }
+            }
+
+            VDivider { }
+
+            // ----------------------------------------------------- AI
+            ToolGroup {
+                title: "AI";
+                WipButton {
+                    label: "AI agent";
+                    icon: Icons.ai;
+                    show-label: true;
+                    min-w: 72px;
+                }
+            }
+        }
+    }
+}

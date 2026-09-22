@@ -1,0 +1,118 @@
+// The drawing viewport, extracted verbatim from the original main.slint so
+// that the Linux and macOS chrome trees share one canvas implementation
+// rather than two drifting copies.
+//
+// Behaviour is unchanged from Phase 1.5: left-drag draws, space-or-right-drag
+// pans, scroll zooms, and the viewport reports its own size so "Fit" is exact.
+
+import { Theme } from "theme.slint";
+
+export component CanvasArea {
+    in property <image> canvas-image;
+    in property <int> canvas-display-width;
+    in property <int> canvas-display-height;
+    in property <float> pan-x;
+    in property <float> pan-y;
+    in property <bool> space-held;
+    in property <int> zoom-level: 1;
+
+    // Document-space pointer position for the sketch's "[Cursor X, Y]"
+    // readout. Derived here from pan/zoom rather than round-tripping
+    // through Rust, because TouchArea only reports `moved` while pressed
+    // and the readout must track plain hovering too.
+    out property <bool> cursor-inside: canvas-touch.has-hover;
+    out property <int> cursor-x: Math.floor(
+        ((canvas-touch.mouse-x / 1px) - root.pan-x) / Math.max(1, root.zoom-level));
+    out property <int> cursor-y: Math.floor(
+        ((canvas-touch.mouse-y / 1px) - root.pan-y) / Math.max(1, root.zoom-level));
+
+    callback pencil-down(float, float);
+    callback pan-down(float, float);
+    callback pointer-moved(float, float);
+    callback pointer-released();
+    callback canvas-scrolled(float);
+    callback viewport-resized(float, float);
+
+    viewport := Rectangle {
+        min-width: 512px;
+        clip: true;
+        background: Theme.surface-sunken;
+
+        // Report our real size to Rust so "Fit" is exact.
+        changed width => { root.viewport-resized(self.width / 1px, self.height / 1px); }
+        changed height => { root.viewport-resized(self.width / 1px, self.height / 1px); }
+
+        Image {
+            source: root.canvas-image;
+            image-rendering: pixelated;
+            x: root.pan-x * 1px;
+            y: root.pan-y * 1px;
+            width: root.canvas-display-width * 1px;
+            height: root.canvas-display-height * 1px;
+        }
+
+        canvas-touch := TouchArea {
+            width: 100%;
+            height: 100%;
+
+            pointer-event(event) => {
+                if (event.kind == PointerEventKind.down) {
+                    if (event.button == PointerEventButton.left) {
+                        if (root.space-held) {
+                            root.pan-down(self.mouse-x / 1px, self.mouse-y / 1px);
+                        } else {
+                            root.pencil-down(self.mouse-x / 1px, self.mouse-y / 1px);
+                        }
+                    } else if (event.button == PointerEventButton.right) {
+                        root.pan-down(self.mouse-x / 1px, self.mouse-y / 1px);
+                    }
+                } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                    root.pointer-released();
+                }
+            }
+            moved => {
+                root.pointer-moved(self.mouse-x / 1px, self.mouse-y / 1px);
+            }
+            scroll-event(event) => {
+                root.canvas-scrolled(event.delta-y / 1px);
+                return accept;
+            }
+        }
+
+        // Scroll affordances from the sketch ("Scroll < Vert. Hori."). These
+        // indicate position only; panning stays on space/right-drag, which
+        // is what the existing tests and muscle memory expect.
+        Rectangle {
+            x: parent.width - 6px;
+            y: 0;
+            width: 6px;
+            height: parent.height;
+            background: Theme.surface-raised;
+
+            Rectangle {
+                width: parent.width - 2px;
+                x: 1px;
+                height: Math.max(24px, parent.height * Math.min(1.0,
+                    parent.height / Math.max(1px, root.canvas-display-height * 1px)));
+                y: Math.max(0px, Math.min(parent.height - self.height, -root.pan-y * 1px));
+                background: Theme.line;
+            }
+        }
+        Rectangle {
+            x: 0;
+            y: parent.height - 6px;
+            width: parent.width - 6px;
+            height: 6px;
+            background: Theme.surface-raised;
+
+            Rectangle {
+                height: parent.height - 2px;
+                y: 1px;
+                width: Math.max(24px, parent.width * Math.min(1.0,
+                    parent.width / Math.max(1px, root.canvas-display-width * 1px)));
+                x: Math.max(0px, Math.min(parent.width - self.width, -root.pan-x * 1px));
+                background: Theme.line;
+            }
+        }
+    }
+}

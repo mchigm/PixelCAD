@@ -1,0 +1,89 @@
+// Named icon handles. `@image-url` only accepts a literal path, so the
+// vendored SVGs are surfaced here once and referenced by name everywhere
+// else. Icons are tinted at use-site with `colorize`.
+//
+// Set: Lucide (ISC) — see crates/app/ui/icons/LICENSE-lucide.txt.
+
+export global Icons {
+    // Chrome
+    out property <image> menu: @image-url("../icons/menu.svg");
+    out property <image> save: @image-url("../icons/save.svg");
+    out property <image> undo: @image-url("../icons/undo-2.svg");
+    out property <image> redo: @image-url("../icons/redo-2.svg");
+    out property <image> settings: @image-url("../icons/settings.svg");
+    out property <image> close: @image-url("../icons/x.svg");
+    out property <image> plus: @image-url("../icons/plus.svg");
+    out property <image> chevron-down: @image-url("../icons/chevron-down.svg");
+    out property <image> chevron-right: @image-url("../icons/chevron-right.svg");
+    out property <image> external: @image-url("../icons/external-link.svg");
+    out property <image> pin: @image-url("../icons/pin.svg");
+
+    // Clipboard / edit
+    out property <image> paste: @image-url("../icons/clipboard-paste.svg");
+    out property <image> cut: @image-url("../icons/scissors.svg");
+    out property <image> copy: @image-url("../icons/copy.svg");
+    out property <image> copy-plus: @image-url("../icons/copy-plus.svg");
+    out property <image> trash: @image-url("../icons/trash-2.svg");
+
+    // Selection / transform
+    out property <image> select: @image-url("../icons/square-dashed.svg");
+    out property <image> select-default: @image-url("../icons/square-dashed-mouse-pointer.svg");
+    out property <image> lasso: @image-url("../icons/lasso.svg");
+    out property <image> crop: @image-url("../icons/crop.svg");
+    out property <image> scaling: @image-url("../icons/scaling.svg");
+    out property <image> rotate: @image-url("../icons/rotate-cw.svg");
+    out property <image> move: @image-url("../icons/move.svg");
+    out property <image> pointer: @image-url("../icons/mouse-pointer-2.svg");
+    out property <image> hand: @image-url("../icons/hand.svg");
+
+    // Stationaries
+    out property <image> pen: @image-url("../icons/pen-tool.svg");
+    out property <image> pencil: @image-url("../icons/pencil.svg");
+    out property <image> brush: @image-url("../icons/paintbrush.svg");
+    out property <image> fill: @image-url("../icons/paint-bucket.svg");
+    out property <image> eraser: @image-url("../icons/eraser.svg");
+    out property <image> text: @image-url("../icons/type.svg");
+    out property <image> pipette: @image-url("../icons/pipette.svg");
+
+    // Shapes
+    out property <image> line: @image-url("../icons/minus.svg");
+    out property <image> rect: @image-url("../icons/square.svg");
+    out property <image> ellipse: @image-url("../icons/circle.svg");
+    out property <image> polygon: @image-url("../icons/hexagon.svg");
+    out property <image> arrow: @image-url("../icons/move-up-right.svg");
+    out property <image> polyline: @image-url("../icons/spline.svg");
+
+    // Style / colour
+    out property <image> palette: @image-url("../icons/palette.svg");
+    out property <image> ruler: @image-url("../icons/ruler.svg");
+    out property <image> grid: @image-url("../icons/grid-3x3.svg");
+    out property <image> image: @image-url("../icons/image.svg");
+    out property <image> baseline: @image-url("../icons/baseline.svg");
+
+    // Panels / navigation
+    out property <image> layers: @image-url("../icons/layers.svg");
+    out property <image> folder: @image-url("../icons/folder.svg");
+    out property <image> folder-tree: @image-url("../icons/folder-tree.svg");
+    out property <image> file: @image-url("../icons/file.svg");
+    out property <image> files: @image-url("../icons/files.svg");
+    out property <image> search: @image-url("../icons/search.svg");
+    out property <image> terminal: @image-url("../icons/terminal.svg");
+    out property <image> chat: @image-url("../icons/message-square.svg");
+    out property <image> panel-left: @image-url("../icons/panel-left.svg");
+    out property <image> panel-bottom: @image-url("../icons/panel-bottom.svg");
+    out property <image> combine: @image-url("../icons/combine.svg");
+    out property <image> eye: @image-url("../icons/eye.svg");
+    out property <image> eye-off: @image-url("../icons/eye-off.svg");
+    out property <image> arrow-up: @image-url("../icons/arrow-up.svg");
+    out property <image> arrow-down: @image-url("../icons/arrow-down.svg");
+
+    // AI
+    out property <image> ai: @image-url("../icons/sparkles.svg");
+    out property <image> bot: @image-url("../icons/bot.svg");
+
+    // View
+    out property <image> zoom-in: @image-url("../icons/zoom-in.svg");
+    out property <image> zoom-out: @image-url("../icons/zoom-out.svg");
+    out property <image> maximize: @image-url("../icons/maximize-2.svg");
+    out property <image> minimize: @image-url("../icons/minimize-2.svg");
+}

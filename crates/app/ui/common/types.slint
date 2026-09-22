@@ -1,0 +1,8 @@
+// Shared data shapes. Defined here rather than in main.slint so that both
+// the chrome trees and the panels can import them without importing the
+// window itself.
+
+export struct LayerRow {
+    name: string,
+    visible: bool,
+}

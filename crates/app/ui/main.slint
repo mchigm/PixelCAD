@@ -1,14 +1,34 @@
-import { Button, LineEdit, CheckBox, ScrollView } from "std-widgets.slint";
+// The application window.
+//
+// This file owns the property/callback contract with Rust and nothing else:
+// the visible chrome lives in `linux/chrome.slint` and `macos/chrome.slint`,
+// picked at runtime by `ui-style`. Keeping one root window (rather than two
+// window types) means `wire_callbacks` in main.rs stays a single code path
+// regardless of which platform chrome is showing.
 
-export struct LayerRow {
-    name: string,
-    visible: bool,
-}
+import { Theme } from "common/theme.slint";
+import { LayerRow } from "common/types.slint";
+import { LinuxChrome } from "linux/chrome.slint";
+import { MacOsChrome } from "macos/chrome.slint";
+import { SettingsPanel } from "settings/settings_panel.slint";
+import { FirstRunDialog } from "common/first_run_dialog.slint";
+
+// Re-exported so the generated Rust API keeps exposing these.
+export { LayerRow, Theme }
 
 export component AppWindow inherits Window {
     title: "PixelCAD";
-    preferred-width: 1080px;
-    preferred-height: 680px;
+    preferred-width: 1400px;
+    preferred-height: 880px;
+    // The chrome is dense; below this the toolbar scrolls rather than
+    // reflowing, so a floor keeps it usable.
+    min-width: 900px;
+    min-height: 600px;
+    background: Theme.surface-base;
+    // Native window decorations are kept on every platform. The macOS
+    // traffic lights therefore stay where macOS puts them, and the sketch's
+    // "Head" bar is an ordinary in-content bar below them.
+    no-frame: false;
 
     // --- State pushed in from Rust after every Controller mutation. ---
     in property <image> canvas-image;
@@ -37,6 +57,13 @@ export component AppWindow inherits Window {
     in-out property <string> text-input: "LABEL";
     in-out property <string> size-w: "64";
     in-out property <string> size-h: "64";
+
+    // --- Platform shell state, pushed from settings.rs. ---
+    /// "linux" or "macos". Drives which chrome tree renders.
+    in-out property <string> ui-style: "linux";
+    /// True while the window is really fullscreen (Rust mirrors
+    /// `slint::Window::is_fullscreen` into this after every toggle).
+    in-out property <bool> is-fullscreen: false;
 
     // --- State the UI owns and Rust only reads via a callback argument. ---
     in-out property <string> save-path: "session.pxc";
@@ -88,6 +115,36 @@ export component AppWindow inherits Window {
     callback layer-up-clicked();
     callback layer-down-clicked();
     callback viewport-resized(float, float);
+    /// Opens the settings page.
+    callback settings-clicked();
+    /// Asks Rust to flip real window fullscreen state.
+    callback fullscreen-toggled();
+
+    // --- Settings page state. Mirrors settings.toml; Rust persists on
+    // --- `settings-changed` and re-applies the theme immediately.
+    in-out property <bool> settings-open: false;
+    /// Which settings tab is showing: 0 Basic, 1 Style, 2 Layout.
+    in-out property <int> settings-tab: 1;
+    in-out property <string> set-ui-style: "auto";
+    in-out property <string> set-scheme: "dark";
+    in-out property <string> set-design: "cyanotype";
+    in-out property <string> set-text-style: "normal";
+    in-out property <bool> set-mono-labels: false;
+    in-out property <string> set-accent: "";
+    in-out property <string> set-icon-size: "16";
+    in-out property <string> set-canvas-w: "64";
+    in-out property <string> set-canvas-h: "64";
+    in-out property <bool> set-autosave: false;
+    in-out property <string> set-autosave-interval: "300";
+    in-out property <bool> set-confirm-exit: true;
+    in-out property <string> set-recent-len: "10";
+    callback settings-changed();
+
+    // --- First-run platform confirmation. ---
+    in-out property <bool> first-run-open: false;
+    in property <string> detected-platform: "Linux";
+    in property <bool> windows-fallback: false;
+    callback first-run-answered(string);
     /// A raw key press. Rust owns the whole shortcut table so the mapping is
     /// testable without a window; the UI only forwards characters.
     callback key-pressed(string, bool) -> bool;
@@ -95,6 +152,12 @@ export component AppWindow inherits Window {
     forward-focus: fs;
 
     fs := FocusScope {
+        // A FocusScope is not a layout, so without these the chrome would
+        // collapse to its preferred size and float in the middle of the
+        // window instead of filling it.
+        width: 100%;
+        height: 100%;
+
         key-pressed(event) => {
             if (event.text == Key.Space) {
                 root.space-held = true;
@@ -116,408 +179,199 @@ export component AppWindow inherits Window {
             return reject;
         }
 
-        VerticalLayout {
-            padding: 8px;
-            spacing: 8px;
+        if root.ui-style != "macos": LinuxChrome {
+            width: 100%;
+            height: 100%;
+            canvas-image: root.canvas-image;
+            canvas-display-width: root.canvas-display-width;
+            canvas-display-height: root.canvas-display-height;
+            pan-x: root.pan-x;
+            pan-y: root.pan-y;
+            space-held: root.space-held;
+            zoom-level: root.zoom-level;
+            tool-labels: root.tool-labels;
+            selected-tool: root.selected-tool;
+            brush-size: root.brush-size;
+            brush-shape: root.brush-shape;
+            tolerance: root.tolerance;
+            stroke-opacity: root.stroke-opacity;
+            palette-colors: root.palette-colors;
+            selected-index: root.selected-index;
+            recent-colors: root.recent-colors;
+            has-selection: root.has-selection;
+            has-clipboard: root.has-clipboard;
+            grid-on: root.grid-on;
+            layers: root.layers;
+            active-layer: root.active-layer;
+            can-undo: root.can-undo;
+            can-redo: root.can-redo;
+            status-message: root.status-message;
+            project-path <=> root.project-path;
+            save-path <=> root.save-path;
+            swatch-hex <=> root.swatch-hex;
+            text-input <=> root.text-input;
+            size-w <=> root.size-w;
+            size-h <=> root.size-h;
 
-            // ---------------------------------------------------- toolbar
-            HorizontalLayout {
-                spacing: 6px;
-                height: 32px;
+            pencil-down(x, y) => { root.pencil-down(x, y); }
+            pan-down(x, y) => { root.pan-down(x, y); }
+            pointer-moved(x, y) => { root.pointer-moved(x, y); }
+            pointer-released() => { root.pointer-released(); }
+            canvas-scrolled(d) => { root.canvas-scrolled(d); }
+            viewport-resized(w, h) => { root.viewport-resized(w, h); }
+            tool-selected(i) => { root.tool-selected(i); }
+            brush-size-changed(v) => { root.brush-size-changed(v); }
+            brush-shape-toggled() => { root.brush-shape-toggled(); }
+            tolerance-changed(v) => { root.tolerance-changed(v); }
+            stroke-opacity-changed(v) => { root.stroke-opacity-changed(v); }
+            palette-clicked(i) => { root.palette-clicked(i); }
+            recent-clicked(i) => { root.recent-clicked(i); }
+            swatch-applied(h) => { root.swatch-applied(h); }
+            cut-clicked() => { root.cut-clicked(); }
+            copy-clicked() => { root.copy-clicked(); }
+            copy-composite-clicked() => { root.copy-composite-clicked(); }
+            paste-clicked() => { root.paste-clicked(); }
+            delete-clicked() => { root.delete-clicked(); }
+            select-all-clicked() => { root.select-all-clicked(); }
+            selection-cleared() => { root.selection-cleared(); }
+            crop-clicked() => { root.crop-clicked(); }
+            rotate-clicked() => { root.rotate-clicked(); }
+            flip-clicked(a) => { root.flip-clicked(a); }
+            resize-canvas-clicked(w, h) => { root.resize-canvas-clicked(w, h); }
+            scale-selection-clicked(w, h) => { root.scale-selection-clicked(w, h); }
+            text-changed(t) => { root.text-changed(t); }
+            undo-clicked() => { root.undo-clicked(); }
+            redo-clicked() => { root.redo-clicked(); }
+            save-clicked(p) => { root.save-clicked(p); }
+            save-project-clicked(p) => { root.save-project-clicked(p); }
+            open-project-clicked(p) => { root.open-project-clicked(p); }
+            layer-add-clicked() => { root.layer-add-clicked(); }
+            layer-remove-clicked() => { root.layer-remove-clicked(); }
+            layer-selected(i) => { root.layer-selected(i); }
+            layer-visibility-toggled(i) => { root.layer-visibility-toggled(i); }
+            layer-duplicate-clicked() => { root.layer-duplicate-clicked(); }
+            layer-merge-clicked() => { root.layer-merge-clicked(); }
+            layer-up-clicked() => { root.layer-up-clicked(); }
+            layer-down-clicked() => { root.layer-down-clicked(); }
+            grid-toggled() => { root.grid-toggled(); }
+            zoom-fit-clicked() => { root.zoom-fit-clicked(); }
+            zoom-actual-clicked() => { root.zoom-actual-clicked(); }
+            settings-clicked() => { root.settings-clicked(); }
+        }
 
-                undo-btn := Button {
-                    text: "Undo";
-                    enabled: root.can-undo;
-                    clicked => { root.undo-clicked(); }
-                }
-                redo-btn := Button {
-                    text: "Redo";
-                    enabled: root.can-redo;
-                    clicked => { root.redo-clicked(); }
-                }
-                Rectangle { width: 8px; }
-                project-edit := LineEdit {
-                    text <=> root.project-path;
-                    width: 170px;
-                }
-                open-btn := Button {
-                    text: "Open";
-                    clicked => { root.open-project-clicked(root.project-path); }
-                }
-                save-project-btn := Button {
-                    text: "Save project";
-                    clicked => { root.save-project-clicked(root.project-path); }
-                }
-                Rectangle { width: 8px; }
-                path-edit := LineEdit {
-                    text <=> root.save-path;
-                    width: 150px;
-                }
-                save-btn := Button {
-                    text: "Save script";
-                    clicked => { root.save-clicked(root.save-path); }
-                }
-                Text {
-                    text: root.status-message;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
-            }
+        if root.ui-style == "macos": MacOsChrome {
+            width: 100%;
+            height: 100%;
+            canvas-image: root.canvas-image;
+            canvas-display-width: root.canvas-display-width;
+            canvas-display-height: root.canvas-display-height;
+            pan-x: root.pan-x;
+            pan-y: root.pan-y;
+            space-held: root.space-held;
+            zoom-level: root.zoom-level;
+            tool-labels: root.tool-labels;
+            selected-tool: root.selected-tool;
+            brush-size: root.brush-size;
+            brush-shape: root.brush-shape;
+            tolerance: root.tolerance;
+            stroke-opacity: root.stroke-opacity;
+            palette-colors: root.palette-colors;
+            selected-index: root.selected-index;
+            recent-colors: root.recent-colors;
+            has-selection: root.has-selection;
+            has-clipboard: root.has-clipboard;
+            grid-on: root.grid-on;
+            layers: root.layers;
+            active-layer: root.active-layer;
+            can-undo: root.can-undo;
+            can-redo: root.can-redo;
+            status-message: root.status-message;
+            is-fullscreen: root.is-fullscreen;
+            project-path <=> root.project-path;
+            save-path <=> root.save-path;
+            swatch-hex <=> root.swatch-hex;
+            text-input <=> root.text-input;
+            size-w <=> root.size-w;
+            size-h <=> root.size-h;
 
-            HorizontalLayout {
-                spacing: 6px;
-                height: 30px;
+            pencil-down(x, y) => { root.pencil-down(x, y); }
+            pan-down(x, y) => { root.pan-down(x, y); }
+            pointer-moved(x, y) => { root.pointer-moved(x, y); }
+            pointer-released() => { root.pointer-released(); }
+            canvas-scrolled(d) => { root.canvas-scrolled(d); }
+            viewport-resized(w, h) => { root.viewport-resized(w, h); }
+            tool-selected(i) => { root.tool-selected(i); }
+            brush-size-changed(v) => { root.brush-size-changed(v); }
+            brush-shape-toggled() => { root.brush-shape-toggled(); }
+            tolerance-changed(v) => { root.tolerance-changed(v); }
+            stroke-opacity-changed(v) => { root.stroke-opacity-changed(v); }
+            palette-clicked(i) => { root.palette-clicked(i); }
+            recent-clicked(i) => { root.recent-clicked(i); }
+            swatch-applied(h) => { root.swatch-applied(h); }
+            cut-clicked() => { root.cut-clicked(); }
+            copy-clicked() => { root.copy-clicked(); }
+            copy-composite-clicked() => { root.copy-composite-clicked(); }
+            paste-clicked() => { root.paste-clicked(); }
+            delete-clicked() => { root.delete-clicked(); }
+            select-all-clicked() => { root.select-all-clicked(); }
+            selection-cleared() => { root.selection-cleared(); }
+            crop-clicked() => { root.crop-clicked(); }
+            rotate-clicked() => { root.rotate-clicked(); }
+            flip-clicked(a) => { root.flip-clicked(a); }
+            resize-canvas-clicked(w, h) => { root.resize-canvas-clicked(w, h); }
+            scale-selection-clicked(w, h) => { root.scale-selection-clicked(w, h); }
+            text-changed(t) => { root.text-changed(t); }
+            undo-clicked() => { root.undo-clicked(); }
+            redo-clicked() => { root.redo-clicked(); }
+            save-clicked(p) => { root.save-clicked(p); }
+            save-project-clicked(p) => { root.save-project-clicked(p); }
+            open-project-clicked(p) => { root.open-project-clicked(p); }
+            layer-add-clicked() => { root.layer-add-clicked(); }
+            layer-remove-clicked() => { root.layer-remove-clicked(); }
+            layer-selected(i) => { root.layer-selected(i); }
+            layer-visibility-toggled(i) => { root.layer-visibility-toggled(i); }
+            layer-duplicate-clicked() => { root.layer-duplicate-clicked(); }
+            layer-merge-clicked() => { root.layer-merge-clicked(); }
+            layer-up-clicked() => { root.layer-up-clicked(); }
+            layer-down-clicked() => { root.layer-down-clicked(); }
+            grid-toggled() => { root.grid-toggled(); }
+            zoom-fit-clicked() => { root.zoom-fit-clicked(); }
+            zoom-actual-clicked() => { root.zoom-actual-clicked(); }
+            settings-clicked() => { root.settings-clicked(); }
+            fullscreen-toggled() => { root.fullscreen-toggled(); }
+        }
 
-                select-all-btn := Button {
-                    text: "All";
-                    clicked => { root.select-all-clicked(); }
-                }
-                cut-btn := Button {
-                    text: "Cut";
-                    enabled: root.has-selection;
-                    clicked => { root.cut-clicked(); }
-                }
-                copy-btn := Button {
-                    text: "Copy";
-                    clicked => { root.copy-clicked(); }
-                }
-                copy-composite-btn := Button {
-                    text: "Copy vis.";
-                    clicked => { root.copy-composite-clicked(); }
-                }
-                paste-btn := Button {
-                    text: "Paste";
-                    enabled: root.has-clipboard;
-                    clicked => { root.paste-clicked(); }
-                }
-                delete-btn := Button {
-                    text: "Delete";
-                    enabled: root.has-selection;
-                    clicked => { root.delete-clicked(); }
-                }
-                Rectangle { width: 6px; }
-                flip-h-btn := Button {
-                    text: "Flip H";
-                    enabled: root.has-selection;
-                    clicked => { root.flip-clicked("horizontal"); }
-                }
-                flip-v-btn := Button {
-                    text: "Flip V";
-                    enabled: root.has-selection;
-                    clicked => { root.flip-clicked("vertical"); }
-                }
-                rotate-btn := Button {
-                    text: "Rotate";
-                    enabled: root.has-selection;
-                    clicked => { root.rotate-clicked(); }
-                }
-                crop-btn := Button {
-                    text: "Crop";
-                    enabled: root.has-selection;
-                    clicked => { root.crop-clicked(); }
-                }
-                Rectangle { width: 6px; }
-                w-edit := LineEdit { text <=> root.size-w; width: 52px; }
-                h-edit := LineEdit { text <=> root.size-h; width: 52px; }
-                resize-btn := Button {
-                    text: "Resize";
-                    clicked => { root.resize-canvas-clicked(root.size-w, root.size-h); }
-                }
-                scale-sel-btn := Button {
-                    text: "Scale sel";
-                    enabled: root.has-selection;
-                    clicked => { root.scale-selection-clicked(root.size-w, root.size-h); }
-                }
-                Rectangle { width: 6px; }
-                grid-btn := Button {
-                    text: root.grid-on ? "Grid on" : "Grid off";
-                    clicked => { root.grid-toggled(); }
-                }
-                zoom-fit-btn := Button {
-                    text: "Fit";
-                    clicked => { root.zoom-fit-clicked(); }
-                }
-                zoom-actual-btn := Button {
-                    text: "1:1";
-                    clicked => { root.zoom-actual-clicked(); }
-                }
-                Text {
-                    text: root.zoom-level + "x";
-                    vertical-alignment: center;
-                }
-            }
+        // Overlays sit above both chrome trees, so they are declared once.
+        if root.settings-open: SettingsPanel {
+            width: 100%;
+            height: 100%;
+            is-linux: root.ui-style != "macos";
+            tab <=> root.settings-tab;
 
-            HorizontalLayout {
-                spacing: 12px;
+            ui-style-choice <=> root.set-ui-style;
+            scheme-choice <=> root.set-scheme;
+            design-choice <=> root.set-design;
+            text-style-choice <=> root.set-text-style;
+            mono-labels <=> root.set-mono-labels;
+            accent-hex <=> root.set-accent;
+            icon-size-choice <=> root.set-icon-size;
+            canvas-w <=> root.set-canvas-w;
+            canvas-h <=> root.set-canvas-h;
+            autosave <=> root.set-autosave;
+            autosave-interval <=> root.set-autosave-interval;
+            confirm-exit <=> root.set-confirm-exit;
+            recent-len <=> root.set-recent-len;
 
-                // ------------------------------------------- left sidebar
-                VerticalLayout {
-                    spacing: 8px;
-                    alignment: start;
-                    width: 200px;
+            changed() => { root.settings-changed(); }
+            closed() => { root.settings-open = false; }
+        }
 
-                    Text { text: "Tools"; font-weight: 700; }
-                    for label[i] in root.tool-labels: tool-btn := Button {
-                        text: label;
-                        primary: root.selected-tool == i;
-                        clicked => { root.tool-selected(i); }
-                    }
-
-                    Rectangle { height: 4px; }
-
-                    HorizontalLayout {
-                        spacing: 4px;
-                        Text {
-                            text: "Brush " + root.brush-size;
-                            vertical-alignment: center;
-                        }
-                        brush-down-btn := Button {
-                            text: "-";
-                            clicked => { root.brush-size-changed(root.brush-size - 1); }
-                        }
-                        brush-up-btn := Button {
-                            text: "+";
-                            clicked => { root.brush-size-changed(root.brush-size + 1); }
-                        }
-                    }
-
-                    HorizontalLayout {
-                        spacing: 4px;
-                        brush-shape-btn := Button {
-                            text: root.brush-shape;
-                            clicked => { root.brush-shape-toggled(); }
-                        }
-                    }
-
-                    HorizontalLayout {
-                        spacing: 4px;
-                        Text {
-                            text: "Tol " + root.tolerance;
-                            vertical-alignment: center;
-                        }
-                        tol-down-btn := Button {
-                            text: "-";
-                            clicked => { root.tolerance-changed(root.tolerance - 8); }
-                        }
-                        tol-up-btn := Button {
-                            text: "+";
-                            clicked => { root.tolerance-changed(root.tolerance + 8); }
-                        }
-                    }
-
-                    HorizontalLayout {
-                        spacing: 4px;
-                        Text {
-                            text: "Op " + root.stroke-opacity;
-                            vertical-alignment: center;
-                        }
-                        op-down-btn := Button {
-                            text: "-";
-                            clicked => { root.stroke-opacity-changed(root.stroke-opacity - 32); }
-                        }
-                        op-up-btn := Button {
-                            text: "+";
-                            clicked => { root.stroke-opacity-changed(root.stroke-opacity + 32); }
-                        }
-                    }
-
-                    deselect-btn := Button {
-                        text: "Clear selection";
-                        enabled: root.has-selection;
-                        clicked => { root.selection-cleared(); }
-                    }
-
-                    Rectangle { height: 4px; }
-
-                    Text { text: "Palette"; font-weight: 700; }
-                    HorizontalLayout {
-                        spacing: 2px;
-                        for i in 8: Rectangle {
-                            width: 22px;
-                            height: 22px;
-                            background: root.palette-colors[i];
-                            border-width: root.selected-index == i ? 3px : 1px;
-                            border-color: root.selected-index == i ? black : #808080;
-
-                            swatch-row1 := TouchArea {
-                                clicked => { root.palette-clicked(i); }
-                            }
-                        }
-                    }
-                    HorizontalLayout {
-                        spacing: 2px;
-                        for i in 8: Rectangle {
-                            width: 22px;
-                            height: 22px;
-                            background: root.palette-colors[i + 8];
-                            border-width: root.selected-index == (i + 8) ? 3px : 1px;
-                            border-color: root.selected-index == (i + 8) ? black : #808080;
-
-                            swatch-row2 := TouchArea {
-                                clicked => { root.palette-clicked(i + 8); }
-                            }
-                        }
-                    }
-                    Text { text: "Recent"; font-weight: 700; }
-                    HorizontalLayout {
-                        spacing: 2px;
-                        height: 18px;
-                        for c[i] in root.recent-colors: Rectangle {
-                            width: 18px;
-                            height: 18px;
-                            background: c;
-                            border-width: 1px;
-                            border-color: #808080;
-                            recent-swatch := TouchArea {
-                                clicked => { root.recent-clicked(i); }
-                            }
-                        }
-                    }
-
-                    Text { text: "Text tool"; font-weight: 700; }
-                    text-edit := LineEdit {
-                        text <=> root.text-input;
-                        width: 170px;
-                        edited => { root.text-changed(self.text); }
-                    }
-
-                    HorizontalLayout {
-                        spacing: 4px;
-                        hex-edit := LineEdit {
-                            text <=> root.swatch-hex;
-                            width: 100px;
-                        }
-                        apply-swatch-btn := Button {
-                            text: "Set";
-                            clicked => { root.swatch-applied(root.swatch-hex); }
-                        }
-                    }
-                }
-
-                // ------------------------------------------------- canvas
-                viewport := Rectangle {
-                    min-width: 512px;
-                    clip: true;
-                    background: #2b2b2b;
-
-                    // Report our real size to Rust so "Fit" is exact.
-                    changed width => { root.viewport-resized(self.width / 1px, self.height / 1px); }
-                    changed height => { root.viewport-resized(self.width / 1px, self.height / 1px); }
-
-                    Image {
-                        source: root.canvas-image;
-                        image-rendering: pixelated;
-                        x: root.pan-x * 1px;
-                        y: root.pan-y * 1px;
-                        width: root.canvas-display-width * 1px;
-                        height: root.canvas-display-height * 1px;
-                    }
-
-                    canvas-touch := TouchArea {
-                        width: 100%;
-                        height: 100%;
-
-                        pointer-event(event) => {
-                            if (event.kind == PointerEventKind.down) {
-                                if (event.button == PointerEventButton.left) {
-                                    if (root.space-held) {
-                                        root.pan-down(self.mouse-x / 1px, self.mouse-y / 1px);
-                                    } else {
-                                        root.pencil-down(self.mouse-x / 1px, self.mouse-y / 1px);
-                                    }
-                                } else if (event.button == PointerEventButton.right) {
-                                    root.pan-down(self.mouse-x / 1px, self.mouse-y / 1px);
-                                }
-                            } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
-                                root.pointer-released();
-                            }
-                        }
-                        moved => {
-                            root.pointer-moved(self.mouse-x / 1px, self.mouse-y / 1px);
-                        }
-                        scroll-event(event) => {
-                            root.canvas-scrolled(event.delta-y / 1px);
-                            return accept;
-                        }
-                    }
-                }
-
-                // ------------------------------------------ right sidebar
-                VerticalLayout {
-                    spacing: 6px;
-                    alignment: start;
-                    width: 190px;
-
-                    Text { text: "Layers (top first)"; font-weight: 700; }
-                    layer-add-btn := Button {
-                        text: "Add layer";
-                        clicked => { root.layer-add-clicked(); }
-                    }
-                    HorizontalLayout {
-                        spacing: 4px;
-                        layer-up-btn := Button {
-                            text: "Raise";
-                            clicked => { root.layer-up-clicked(); }
-                        }
-                        layer-down-btn := Button {
-                            text: "Lower";
-                            clicked => { root.layer-down-clicked(); }
-                        }
-                    }
-                    layer-duplicate-btn := Button {
-                        text: "Duplicate layer";
-                        clicked => { root.layer-duplicate-clicked(); }
-                    }
-                    layer-merge-btn := Button {
-                        text: "Merge down";
-                        enabled: root.layers.length > 1;
-                        clicked => { root.layer-merge-clicked(); }
-                    }
-                    layer-remove-btn := Button {
-                        text: "Delete layer";
-                        enabled: root.layers.length > 1;
-                        clicked => { root.layer-remove-clicked(); }
-                    }
-
-                    // Displayed top-first, which is the opposite of the
-                    // model's bottom-first order; Rust converts the index.
-                    for row[i] in root.layers: Rectangle {
-                        height: 26px;
-                        background: root.active-layer == (root.layers.length - 1 - i)
-                            ? #4a6fa5 : transparent;
-                        border-width: 1px;
-                        border-color: #808080;
-
-                        HorizontalLayout {
-                            padding-left: 4px;
-                            padding-right: 4px;
-                            spacing: 4px;
-
-                            layer-visible-box := CheckBox {
-                                checked: row.visible;
-                                toggled => {
-                                    root.layer-visibility-toggled(root.layers.length - 1 - i);
-                                }
-                            }
-                            Text {
-                                text: row.name;
-                                vertical-alignment: center;
-                                overflow: elide;
-                                horizontal-stretch: 1;
-                            }
-                        }
-
-                        // Offset past the visibility checkbox so that
-                        // clicking the eye toggles it rather than merely
-                        // selecting the row.
-                        layer-row-touch := TouchArea {
-                            x: 34px;
-                            width: parent.width - 34px;
-                            clicked => { root.layer-selected(root.layers.length - 1 - i); }
-                        }
-                    }
-                }
-            }
+        if root.first-run-open: FirstRunDialog {
+            width: 100%;
+            height: 100%;
+            detected: root.detected-platform;
+            windows-fallback: root.windows-fallback;
+            answered(choice) => { root.first-run-answered(choice); }
         }
     }
 }

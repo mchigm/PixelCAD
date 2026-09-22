@@ -1,0 +1,608 @@
+// Linux chrome: stacked horizontal bands, the GIMP/Krita idiom its users
+// expect. Layout follows docs/design/pixelcad-ui-draft-1.md exactly:
+//
+//   Title -> Secondary1 (ribbon tabs) -> contextual toolbar -> File tabs
+//   -> Main (cursor readout | canvas | rotate+layers strip)
+//   -> Style -> Secondary2 -> Tail
+//
+// Controls with no implementation behind them use the WIP primitive rather
+// than being hidden, per the maintainer's instruction.
+
+import { LineEdit } from "std-widgets.slint";
+import { Theme } from "../common/theme.slint";
+import { Icons } from "../common/icons.slint";
+import { LayerRow } from "../common/types.slint";
+import { IconButton, ChromeButton, HDivider, VDivider, Readout } from "../common/controls.slint";
+import { WipButton, WipPanel, DashedBorder } from "../common/wip.slint";
+import { CanvasArea } from "../common/canvas.slint";
+import { LayersPanel } from "../common/layers_panel.slint";
+import { HomeToolbar } from "../common/home_toolbar.slint";
+
+export component LinuxChrome {
+    // --- document / canvas ---
+    in property <image> canvas-image;
+    in property <int> canvas-display-width;
+    in property <int> canvas-display-height;
+    in property <float> pan-x;
+    in property <float> pan-y;
+    in property <bool> space-held;
+    in property <int> zoom-level;
+
+    // --- tools / palette ---
+    in property <[string]> tool-labels;
+    in property <int> selected-tool;
+    in property <int> brush-size;
+    in property <string> brush-shape;
+    in property <int> tolerance;
+    in property <int> stroke-opacity;
+    in property <[color]> palette-colors;
+    in property <int> selected-index;
+    in property <[color]> recent-colors;
+    in property <bool> has-selection;
+    in property <bool> has-clipboard;
+    in property <bool> grid-on;
+
+    // --- layers ---
+    in property <[LayerRow]> layers;
+    in property <int> active-layer;
+
+    // --- shell ---
+    in property <bool> can-undo;
+    in property <bool> can-redo;
+    in property <string> status-message;
+    in-out property <string> project-path;
+    in-out property <string> save-path;
+    in-out property <string> swatch-hex;
+    in-out property <string> text-input;
+    in-out property <string> size-w;
+    in-out property <string> size-h;
+
+    // Local UI state: which ribbon tab is showing.
+    in-out property <int> active-tab: 0;
+
+    callback pencil-down(float, float);
+    callback pan-down(float, float);
+    callback pointer-moved(float, float);
+    callback pointer-released();
+    callback canvas-scrolled(float);
+    callback viewport-resized(float, float);
+    callback tool-selected(int);
+    callback brush-size-changed(int);
+    callback brush-shape-toggled();
+    callback tolerance-changed(int);
+    callback stroke-opacity-changed(int);
+    callback palette-clicked(int);
+    callback recent-clicked(int);
+    callback swatch-applied(string);
+    callback cut-clicked();
+    callback copy-clicked();
+    callback copy-composite-clicked();
+    callback paste-clicked();
+    callback delete-clicked();
+    callback select-all-clicked();
+    callback selection-cleared();
+    callback crop-clicked();
+    callback rotate-clicked();
+    callback flip-clicked(string);
+    callback resize-canvas-clicked(string, string);
+    callback scale-selection-clicked(string, string);
+    callback text-changed(string);
+    callback undo-clicked();
+    callback redo-clicked();
+    callback save-clicked(string);
+    callback save-project-clicked(string);
+    callback open-project-clicked(string);
+    callback layer-add-clicked();
+    callback layer-remove-clicked();
+    callback layer-selected(int);
+    callback layer-visibility-toggled(int);
+    callback layer-duplicate-clicked();
+    callback layer-merge-clicked();
+    callback layer-up-clicked();
+    callback layer-down-clicked();
+    callback grid-toggled();
+    callback zoom-fit-clicked();
+    callback zoom-actual-clicked();
+    callback settings-clicked();
+
+    Rectangle {
+        background: Theme.surface-base;
+
+        VerticalLayout {
+            spacing: 0;
+
+            // ==================================================== Title
+            Rectangle {
+                height: Theme.row-toolbar;
+                background: Theme.surface-raised;
+
+                HorizontalLayout {
+                    padding-left: Theme.space-2;
+                    padding-right: Theme.space-2;
+                    spacing: Theme.space-2;
+                    alignment: start;
+
+                    // "Icon of APP, open menu" — the app menu does not exist.
+                    app-menu-wip := WipButton {
+                        label: "PixelCAD menu";
+                        icon: Icons.menu;
+                        show-label: false;
+                        min-w: 26px;
+                    }
+
+                    VDivider { }
+
+                    title-save-btn := IconButton {
+                        icon: Icons.save;
+                        label: "Save project";
+                        clicked => { root.save-project-clicked(root.project-path); }
+                    }
+                    undo-btn := IconButton {
+                        icon: Icons.undo;
+                        label: "Undo";
+                        enabled: root.can-undo;
+                        clicked => { root.undo-clicked(); }
+                    }
+                    redo-btn := IconButton {
+                        icon: Icons.redo;
+                        label: "Redo";
+                        enabled: root.can-redo;
+                        clicked => { root.redo-clicked(); }
+                    }
+
+                    VDivider { }
+
+                    filename-edit := LineEdit {
+                        text <=> root.project-path;
+                        width: 220px;
+                        height: 24px;
+                    }
+                    title-open-btn := ChromeButton {
+                        label: "Open";
+                        clicked => { root.open-project-clicked(root.project-path); }
+                    }
+                    script-edit := LineEdit {
+                        text <=> root.save-path;
+                        width: 150px;
+                        height: 24px;
+                    }
+                    title-save-script-btn := ChromeButton {
+                        label: "Save script";
+                        clicked => { root.save-clicked(root.save-path); }
+                    }
+
+                    Text {
+                        text: root.status-message;
+                        color: Theme.text-muted;
+                        font-size: Theme.text-body;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+
+                    settings-btn := IconButton {
+                        icon: Icons.settings;
+                        label: "Settings";
+                        clicked => { root.settings-clicked(); }
+                    }
+                }
+            }
+
+            HDivider { }
+
+            // ============================================= Secondary1
+            Rectangle {
+                height: Theme.row-tabs;
+                background: Theme.surface-base;
+
+                HorizontalLayout {
+                    padding-left: Theme.space-2;
+                    spacing: 0;
+                    alignment: start;
+
+                    ribbon-home := ChromeButton {
+                        label: "Home";
+                        active: root.active-tab == 0;
+                        clicked => { root.active-tab = 0; }
+                    }
+                    ribbon-tool := ChromeButton {
+                        label: "Tool";
+                        active: root.active-tab == 1;
+                        clicked => { root.active-tab = 1; }
+                    }
+                    ribbon-view := ChromeButton {
+                        label: "View";
+                        active: root.active-tab == 2;
+                        clicked => { root.active-tab = 2; }
+                    }
+                    ribbon-custom := ChromeButton {
+                        label: "Custom";
+                        active: root.active-tab == 3;
+                        clicked => { root.active-tab = 3; }
+                    }
+                    // "Expand: other tabs" and right-click tab menus.
+                    ribbon-expand-wip := WipButton {
+                        label: "More tabs";
+                        icon: Icons.chevron-down;
+                        show-label: false;
+                        min-w: 24px;
+                    }
+                }
+            }
+
+            // ====================================== contextual toolbar
+            // Scrolled horizontally rather than stretched: the toolbar is
+            // wider than a small window, and clipping it would silently
+            // hide the Colour and AI groups at the far end.
+            if root.active-tab == 0: Flickable {
+                height: 76px;
+                min-width: 0px;
+                content-width: 1360px;
+                content-height: 76px;
+                HomeToolbar {
+                width: 1360px;
+                tool-labels: root.tool-labels;
+                selected-tool: root.selected-tool;
+                brush-size: root.brush-size;
+                brush-shape: root.brush-shape;
+                tolerance: root.tolerance;
+                stroke-opacity: root.stroke-opacity;
+                palette-colors: root.palette-colors;
+                selected-index: root.selected-index;
+                recent-colors: root.recent-colors;
+                has-selection: root.has-selection;
+                has-clipboard: root.has-clipboard;
+                swatch-hex <=> root.swatch-hex;
+                text-input <=> root.text-input;
+                size-w <=> root.size-w;
+                size-h <=> root.size-h;
+
+                tool-selected(i) => { root.tool-selected(i); }
+                brush-size-changed(v) => { root.brush-size-changed(v); }
+                brush-shape-toggled() => { root.brush-shape-toggled(); }
+                tolerance-changed(v) => { root.tolerance-changed(v); }
+                stroke-opacity-changed(v) => { root.stroke-opacity-changed(v); }
+                palette-clicked(i) => { root.palette-clicked(i); }
+                recent-clicked(i) => { root.recent-clicked(i); }
+                swatch-applied(h) => { root.swatch-applied(h); }
+                cut-clicked() => { root.cut-clicked(); }
+                copy-clicked() => { root.copy-clicked(); }
+                copy-composite-clicked() => { root.copy-composite-clicked(); }
+                paste-clicked() => { root.paste-clicked(); }
+                delete-clicked() => { root.delete-clicked(); }
+                select-all-clicked() => { root.select-all-clicked(); }
+                selection-cleared() => { root.selection-cleared(); }
+                crop-clicked() => { root.crop-clicked(); }
+                rotate-clicked() => { root.rotate-clicked(); }
+                flip-clicked(a) => { root.flip-clicked(a); }
+                resize-canvas-clicked(w, h) => { root.resize-canvas-clicked(w, h); }
+                text-changed(t) => { root.text-changed(t); }
+                }
+            }
+            if root.active-tab == 1: Rectangle {
+                height: 72px;
+                background: Theme.surface-raised;
+                HorizontalLayout {
+                    padding: Theme.space-2;
+                    WipPanel {
+                        title: "Tool tab";
+                        items: ["Tool presets", "Tool options", "Custom tool sets"];
+                    }
+                }
+            }
+            if root.active-tab == 2: Rectangle {
+                height: 72px;
+                background: Theme.surface-raised;
+                HorizontalLayout {
+                    padding: Theme.space-2;
+                    WipPanel {
+                        title: "View tab";
+                        items: ["Rulers", "Guides", "Navigator", "Screen modes"];
+                    }
+                }
+            }
+            if root.active-tab == 3: Rectangle {
+                height: 72px;
+                background: Theme.surface-raised;
+                HorizontalLayout {
+                    padding: Theme.space-2;
+                    WipPanel {
+                        title: "Custom tab";
+                        items: ["User-defined tab", "Configured in Settings"];
+                    }
+                }
+            }
+
+            HDivider { }
+
+            // ================================================ File tabs
+            Rectangle {
+                height: Theme.row-tail;
+                background: Theme.surface-base;
+
+                HorizontalLayout {
+                    padding-left: Theme.space-2;
+                    spacing: Theme.space-1;
+                    alignment: start;
+
+                    // One real document; multi-document is not implemented.
+                    Rectangle {
+                        width: current-file-text.preferred-width + 2 * Theme.space-2;
+                        background: Theme.surface-raised;
+                        border-width: 1px;
+                        border-color: Theme.line;
+
+                        current-file-text := Text {
+                            text: root.project-path;
+                            color: Theme.text-primary;
+                            font-size: Theme.text-body;
+                            vertical-alignment: center;
+                            horizontal-alignment: center;
+                            overflow: elide;
+                        }
+                    }
+                    file-tab-add-wip := WipButton {
+                        label: "New file tab";
+                        icon: Icons.plus;
+                        show-label: false;
+                        min-w: 22px;
+                    }
+                }
+            }
+
+            HDivider { }
+
+            // ===================================================== Main
+            HorizontalLayout {
+                spacing: 0;
+                vertical-stretch: 1;
+
+                // cursor readout column
+                Rectangle {
+                    width: 92px;
+                    background: Theme.surface-base;
+                    VerticalLayout {
+                        padding: Theme.space-2;
+                        spacing: Theme.space-1;
+                        alignment: start;
+
+                        Text {
+                            text: "Cursor";
+                            color: Theme.text-muted;
+                            font-size: Theme.text-label;
+                        }
+                        Readout {
+                            text: canvas.cursor-inside
+                                ? "x " + canvas.cursor-x + "\ny " + canvas.cursor-y
+                                : "x —\ny —";
+                        }
+                        Readout { text: "z " + root.zoom-level + "x"; }
+                    }
+                }
+
+                VDivider { }
+
+                canvas := CanvasArea {
+                    horizontal-stretch: 1;
+                    canvas-image: root.canvas-image;
+                    canvas-display-width: root.canvas-display-width;
+                    canvas-display-height: root.canvas-display-height;
+                    pan-x: root.pan-x;
+                    pan-y: root.pan-y;
+                    space-held: root.space-held;
+                    zoom-level: root.zoom-level;
+
+                    pencil-down(x, y) => { root.pencil-down(x, y); }
+                    pan-down(x, y) => { root.pan-down(x, y); }
+                    pointer-moved(x, y) => { root.pointer-moved(x, y); }
+                    pointer-released() => { root.pointer-released(); }
+                    canvas-scrolled(d) => { root.canvas-scrolled(d); }
+                    viewport-resized(w, h) => { root.viewport-resized(w, h); }
+                }
+
+                VDivider { }
+
+                // right vertical strip: rotate angle + layers
+                Rectangle {
+                    width: 190px;
+                    background: Theme.surface-base;
+
+                    VerticalLayout {
+                        padding: Theme.space-2;
+                        spacing: Theme.space-2;
+                        alignment: start;
+
+                        WipPanel {
+                            title: "Rotate angle";
+                            items: ["Precise angle input", "Repeat transform"];
+                        }
+
+                        LayersPanel {
+                            layers: root.layers;
+                            active-layer: root.active-layer;
+
+                            layer-add-clicked() => { root.layer-add-clicked(); }
+                            layer-remove-clicked() => { root.layer-remove-clicked(); }
+                            layer-selected(i) => { root.layer-selected(i); }
+                            layer-visibility-toggled(i) => { root.layer-visibility-toggled(i); }
+                            layer-duplicate-clicked() => { root.layer-duplicate-clicked(); }
+                            layer-merge-clicked() => { root.layer-merge-clicked(); }
+                            layer-up-clicked() => { root.layer-up-clicked(); }
+                            layer-down-clicked() => { root.layer-down-clicked(); }
+                        }
+                    }
+                }
+            }
+
+            HDivider { }
+
+            // ==================================================== Style
+            Rectangle {
+                height: 34px;
+                background: Theme.surface-raised;
+
+                HorizontalLayout {
+                    padding-left: Theme.space-2;
+                    padding-right: Theme.space-2;
+                    padding-top: Theme.space-1;
+                    padding-bottom: Theme.space-1;
+                    spacing: Theme.space-2;
+                    alignment: start;
+
+                    canvas-style-wip := WipButton {
+                        label: "Canvas style";
+                        icon: Icons.baseline;
+                        min-w: 120px;
+                    }
+                    media-bay-wip := WipButton {
+                        label: "Media bay";
+                        icon: Icons.image;
+                        min-w: 110px;
+                    }
+                    new-style-wip := WipButton {
+                        label: "New style tab";
+                        icon: Icons.plus;
+                        show-label: false;
+                        min-w: 24px;
+                    }
+
+                    // Grid is real, and belongs with the canvas-style group.
+                    VDivider { }
+                    grid-btn := ChromeButton {
+                        label: root.grid-on ? "Grid on" : "Grid off";
+                        active: root.grid-on;
+                        clicked => { root.grid-toggled(); }
+                    }
+                }
+            }
+
+            HDivider { }
+
+            // =============================================== Secondary2
+            Rectangle {
+                height: 34px;
+                background: Theme.surface-base;
+
+                // "Note that elements or items are centered"
+                HorizontalLayout {
+                    padding-top: Theme.space-1;
+                    padding-bottom: Theme.space-1;
+                    spacing: Theme.space-2;
+                    alignment: center;
+
+                    find-wip := WipButton {
+                        label: "Find";
+                        icon: Icons.search;
+                        min-w: 90px;
+                    }
+                    command-line-wip := WipButton {
+                        label: "Command line";
+                        icon: Icons.terminal;
+                        min-w: 220px;
+                    }
+                    ai-chat-wip := WipButton {
+                        label: "AI chat";
+                        icon: Icons.chat;
+                        min-w: 110px;
+                    }
+                    secondary-tools-wip := WipButton {
+                        label: "Secondary tools";
+                        icon: Icons.panel-bottom;
+                        min-w: 140px;
+                    }
+                }
+            }
+
+            HDivider { }
+
+            // ===================================================== Tail
+            Rectangle {
+                height: Theme.row-tail + 4px;
+                background: Theme.surface-raised;
+
+                HorizontalLayout {
+                    padding-left: Theme.space-2;
+                    padding-right: Theme.space-2;
+                    spacing: Theme.space-2;
+                    alignment: start;
+
+                    // "Move: allows drag/move/rotate" — no such tool exists;
+                    // only arrow-key nudge and fixed commands do.
+                    move-mode-wip := WipButton {
+                        label: "Move mode";
+                        icon: Icons.move;
+                        show-label: false;
+                        min-w: 22px;
+                    }
+                    // "Click: allows select/cursor actions" — the marquee.
+                    select-mode-btn := IconButton {
+                        icon: Icons.pointer;
+                        label: "Select mode";
+                        active: root.selected-tool == 10;
+                        box: 22px;
+                        clicked => { root.tool-selected(10); }
+                    }
+
+                    VDivider { }
+
+                    Text {
+                        text: "Canvas";
+                        color: Theme.text-muted;
+                        font-size: Theme.text-label;
+                        vertical-alignment: center;
+                    }
+                    w-edit := LineEdit {
+                        text <=> root.size-w;
+                        width: 52px;
+                        height: 22px;
+                    }
+                    h-edit := LineEdit {
+                        text <=> root.size-h;
+                        width: 52px;
+                        height: 22px;
+                    }
+                    resize-btn := ChromeButton {
+                        label: "Resize";
+                        clicked => { root.resize-canvas-clicked(root.size-w, root.size-h); }
+                    }
+                    scale-sel-btn := ChromeButton {
+                        label: "Scale sel";
+                        enabled: root.has-selection;
+                        clicked => { root.scale-selection-clicked(root.size-w, root.size-h); }
+                    }
+                    canvas-format-wip := WipButton {
+                        label: "Format / units";
+                        icon: Icons.ruler;
+                        show-label: false;
+                        min-w: 22px;
+                    }
+
+                    Rectangle { horizontal-stretch: 1; }
+
+                    // Zoom cluster reuses the existing scroll-zoom plumbing.
+                    zoom-out-btn := IconButton {
+                        icon: Icons.zoom-out;
+                        label: "Zoom out";
+                        box: 22px;
+                        clicked => { root.canvas-scrolled(-1.0); }
+                    }
+                    Readout { text: root.zoom-level + "00%"; }
+                    zoom-in-btn := IconButton {
+                        icon: Icons.zoom-in;
+                        label: "Zoom in";
+                        box: 22px;
+                        clicked => { root.canvas-scrolled(1.0); }
+                    }
+                    zoom-fit-btn := ChromeButton {
+                        label: "Fit";
+                        clicked => { root.zoom-fit-clicked(); }
+                    }
+                    zoom-actual-btn := ChromeButton {
+                        label: "1:1";
+                        clicked => { root.zoom-actual-clicked(); }
+                    }
+                }
+            }
+        }
+    }
+}

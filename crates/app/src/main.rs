@@ -14,6 +14,7 @@
 
 mod controller;
 mod render;
+mod settings;
 
 slint::include_modules!();
 
@@ -541,6 +542,185 @@ fn status_of(result: std::io::Result<()>, path: &str, verb: &str) -> String {
     }
 }
 
+/// Pushes persisted settings into the UI: which chrome to render and how
+/// it is themed.
+fn apply_settings(app: &AppWindow, s: &settings::AppSettings) {
+    app.set_ui_style(s.ui_style.as_ui_string().into());
+    let theme = app.global::<Theme>();
+    theme.set_scheme(s.theme.as_ui_string().into());
+    theme.set_design(s.color_design.as_ui_string().into());
+    theme.set_text_scale(s.text_style.scale());
+    theme.set_mono_labels(s.mono_labels);
+    theme.set_icon_size(s.icon_size as f32);
+    // An empty or invalid accent means "follow the colour design", which
+    // the Slint side represents as `transparent`.
+    theme.set_accent_override(
+        parse_hex_color(&s.accent_color).unwrap_or(SlintColor::from_argb_u8(0, 0, 0, 0)),
+    );
+}
+
+/// `#rrggbb` -> Slint colour. Settings validation already guarantees the
+/// shape, so this only has to handle the parse itself.
+fn parse_hex_color(hex: &str) -> Option<SlintColor> {
+    let body = hex.strip_prefix('#')?;
+    if body.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&body[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&body[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&body[4..6], 16).ok()?;
+    Some(SlintColor::from_rgb_u8(r, g, b))
+}
+
+/// Mirrors persisted settings into the Settings page's own properties, so
+/// the page opens showing what is actually saved.
+fn push_settings_form(app: &AppWindow, s: &settings::AppSettings) {
+    app.set_set_ui_style(
+        match s.ui_style {
+            settings::UiStyle::Auto => "auto",
+            settings::UiStyle::Linux => "linux",
+            settings::UiStyle::MacOs => "macos",
+        }
+        .into(),
+    );
+    app.set_set_scheme(s.theme.as_ui_string().into());
+    app.set_set_design(s.color_design.as_ui_string().into());
+    app.set_set_text_style(
+        match s.text_style {
+            settings::TextStyle::Compact => "compact",
+            settings::TextStyle::Normal => "normal",
+            settings::TextStyle::Comfortable => "comfortable",
+        }
+        .into(),
+    );
+    app.set_set_mono_labels(s.mono_labels);
+    app.set_set_accent(s.accent_color.clone().into());
+    app.set_set_icon_size(s.icon_size.to_string().into());
+    app.set_set_canvas_w(s.default_canvas_width.to_string().into());
+    app.set_set_canvas_h(s.default_canvas_height.to_string().into());
+    app.set_set_autosave(s.autosave_enabled);
+    app.set_set_autosave_interval(s.autosave_interval_secs.to_string().into());
+    app.set_set_confirm_exit(s.confirm_before_exit);
+    app.set_set_recent_len(s.recent_files_len.to_string().into());
+}
+
+/// Reads the Settings page back into an `AppSettings`.
+///
+/// Unparseable numeric fields keep the previous value rather than resetting
+/// to a default: the user is mid-edit, and a half-typed number must not
+/// silently overwrite what they had.
+fn collect_settings(app: &AppWindow, previous: &settings::AppSettings) -> settings::AppSettings {
+    let mut s = previous.clone();
+    s.ui_style = match app.get_set_ui_style().as_str() {
+        "linux" => settings::UiStyle::Linux,
+        "macos" => settings::UiStyle::MacOs,
+        _ => settings::UiStyle::Auto,
+    };
+    s.theme = match app.get_set_scheme().as_str() {
+        "light" => settings::Theme::Light,
+        "high-contrast" => settings::Theme::HighContrast,
+        _ => settings::Theme::Dark,
+    };
+    s.color_design = match app.get_set_design().as_str() {
+        "graphite" => settings::ColorDesign::Graphite,
+        "amber" => settings::ColorDesign::Amber,
+        "phosphor" => settings::ColorDesign::Phosphor,
+        _ => settings::ColorDesign::Cyanotype,
+    };
+    s.text_style = match app.get_set_text_style().as_str() {
+        "compact" => settings::TextStyle::Compact,
+        "comfortable" => settings::TextStyle::Comfortable,
+        _ => settings::TextStyle::Normal,
+    };
+    s.mono_labels = app.get_set_mono_labels();
+    s.accent_color = app.get_set_accent().trim().to_string();
+    if let Ok(v) = app.get_set_icon_size().parse::<u32>() {
+        s.icon_size = v;
+    }
+    if let Ok(v) = app.get_set_canvas_w().trim().parse::<u32>() {
+        s.default_canvas_width = v;
+    }
+    if let Ok(v) = app.get_set_canvas_h().trim().parse::<u32>() {
+        s.default_canvas_height = v;
+    }
+    s.autosave_enabled = app.get_set_autosave();
+    if let Ok(v) = app.get_set_autosave_interval().trim().parse::<u32>() {
+        s.autosave_interval_secs = v;
+    }
+    s.confirm_before_exit = app.get_set_confirm_exit();
+    if let Ok(v) = app.get_set_recent_len().trim().parse::<u32>() {
+        s.recent_files_len = v;
+    }
+    s.sanitize();
+    s
+}
+
+/// Wires the Settings page and the first-run platform dialog.
+///
+/// `save` is injected rather than called directly so the headless tests can
+/// persist into a temporary directory instead of the real user config.
+fn wire_settings(
+    app: &AppWindow,
+    initial: settings::AppSettings,
+    save: Rc<dyn Fn(&settings::AppSettings)>,
+) {
+    let current = Rc::new(RefCell::new(initial));
+
+    {
+        let app_weak = app.as_weak();
+        let current = current.clone();
+        let save = save.clone();
+        app.on_settings_changed(move || {
+            let Some(app) = app_weak.upgrade() else { return };
+            let next = collect_settings(&app, &current.borrow());
+            apply_settings(&app, &next);
+            // Write the sanitised values back so the form cannot keep
+            // showing something that was rejected.
+            push_settings_form(&app, &next);
+            save(&next);
+            *current.borrow_mut() = next;
+        });
+    }
+
+    let app_weak = app.as_weak();
+    app.on_first_run_answered(move |choice| {
+        let Some(app) = app_weak.upgrade() else { return };
+        let mut next = current.borrow().clone();
+        next.ui_style = match choice.as_str() {
+            "linux" => settings::UiStyle::Linux,
+            "macos" => settings::UiStyle::MacOs,
+            // "detected" keeps Auto, so the choice still follows the OS if
+            // the same config is later used on another machine.
+            _ => settings::UiStyle::Auto,
+        };
+        next.first_run_completed = true;
+        apply_settings(&app, &next);
+        push_settings_form(&app, &next);
+        save(&next);
+        *current.borrow_mut() = next;
+        app.set_first_run_open(false);
+    });
+}
+
+/// Wires the real fullscreen toggle.
+///
+/// Slint exposes fullscreen only on the Rust `Window`, not as a `.slint`
+/// property, so the flow is: UI asks -> Rust flips the real window ->
+/// Rust mirrors `is_fullscreen()` back into the `is-fullscreen` property
+/// the macOS chrome switches its layout on. Mirroring the *queried* state
+/// rather than the requested one means the UI cannot drift out of step
+/// with a window manager that refused the request.
+fn wire_fullscreen(app: &AppWindow) {
+    let app_weak = app.as_weak();
+    app.on_fullscreen_toggled(move || {
+        if let Some(app) = app_weak.upgrade() {
+            let window = app.window();
+            window.set_fullscreen(!window.is_fullscreen());
+            app.set_is_fullscreen(window.is_fullscreen());
+        }
+    });
+}
+
 fn main() -> Result<(), slint::PlatformError> {
     let app = AppWindow::new()?;
     let controller =
@@ -550,8 +730,37 @@ fn main() -> Result<(), slint::PlatformError> {
         Tool::ALL.iter().map(|t| slint::SharedString::from(t.label())).collect();
     app.set_tool_labels(ModelRc::new(VecModel::from(tool_labels)));
 
+    let (loaded, outcome) = settings::load();
+    apply_settings(&app, &loaded);
+    push_settings_form(&app, &loaded);
+    if let settings::LoadOutcome::Corrupt(reason) = &outcome {
+        // Never silently discard a user's configuration.
+        app.set_status_message(format!("Settings could not be read ({reason}); using defaults").into());
+    }
+
+    // Detected but confirmed, never silently imposed.
+    let detection = settings::detect_platform();
+    app.set_detected_platform(detection.platform.to_string().into());
+    app.set_windows_fallback(detection.windows_fallback);
+    app.set_first_run_open(!loaded.first_run_completed);
+
+    {
+        let settings_open = app.as_weak();
+        app.on_settings_clicked(move || {
+            if let Some(app) = settings_open.upgrade() {
+                app.set_settings_open(true);
+            }
+        });
+    }
+
     refresh(&app, &controller.borrow());
     wire_callbacks(&app, controller);
+    wire_fullscreen(&app);
+    wire_settings(&app, loaded, Rc::new(|s| {
+        if let Err(e) = settings::save(s) {
+            eprintln!("could not save settings: {e}");
+        }
+    }));
 
     app.run()
 }
@@ -572,6 +781,10 @@ mod gui_tests {
     fn new_app_with_controller() -> (AppWindow, Rc<RefCell<Controller>>) {
         i_slint_backend_testing::init_no_event_loop();
         let app = AppWindow::new().unwrap();
+        // The chrome is layout-driven, and Slint only assigns geometry once
+        // the window has a size. Without this, most controls stay 0x0 and
+        // are absent from the element tree the tests search.
+        app.window().set_size(slint::PhysicalSize::new(1600, 1000));
         let controller =
             Rc::new(RefCell::new(Controller::new(DEFAULT_CANVAS_WIDTH, DEFAULT_CANVAS_HEIGHT)));
         let tool_labels: Vec<SharedString> =
@@ -640,8 +853,8 @@ mod gui_tests {
     fn clicking_a_palette_swatch_selects_it() {
         let (app, controller) = new_app_with_controller();
         let mut swatches: Vec<ElementHandle> =
-            ElementHandle::find_by_element_id(&app, "AppWindow::swatch-row1").collect();
-        swatches.extend(ElementHandle::find_by_element_id(&app, "AppWindow::swatch-row2"));
+            ElementHandle::find_by_element_id(&app, "HomeToolbar::swatch-row1").collect();
+        swatches.extend(ElementHandle::find_by_element_id(&app, "HomeToolbar::swatch-row2"));
         assert_eq!(swatches.len(), pixelcad_core::PALETTE_SIZE, "expected all 16 swatches");
 
         swatches[4].mock_single_click(PointerEventButton::Left);
@@ -658,7 +871,7 @@ mod gui_tests {
     #[test]
     fn dragging_on_the_canvas_draws_a_connected_stroke_and_enables_undo() {
         let (app, controller) = new_app_with_controller();
-        let canvas = find_one(&app, "AppWindow::canvas-touch");
+        let canvas = find_one(&app, "CanvasArea::canvas-touch");
         let top_left = canvas.absolute_position();
         let window = app.window();
 
@@ -694,7 +907,7 @@ mod gui_tests {
         // AC13. This is the whole point of Task 6's grouping, verified at
         // the level the user actually experiences it.
         let (app, controller) = new_app_with_controller();
-        let canvas = find_one(&app, "AppWindow::canvas-touch");
+        let canvas = find_one(&app, "CanvasArea::canvas-touch");
         let origin = canvas.absolute_position();
         let window = app.window();
 
@@ -720,7 +933,7 @@ mod gui_tests {
         assert_eq!(painted(&controller.borrow()), 7, "a 7-pixel stroke was drawn");
         assert!(app.get_can_undo());
 
-        find_one(&app, "AppWindow::undo-btn").mock_single_click(PointerEventButton::Left);
+        find_one(&app, "LinuxChrome::undo-btn").mock_single_click(PointerEventButton::Left);
 
         assert_eq!(painted(&controller.borrow()), 0, "one Undo removed the whole drag");
         assert!(!app.get_can_undo(), "and landed exactly on the empty canvas");
@@ -730,7 +943,7 @@ mod gui_tests {
     #[test]
     fn right_click_drag_pans_the_view_without_touching_the_document() {
         let (app, controller) = new_app_with_controller();
-        let canvas = find_one(&app, "AppWindow::canvas-touch");
+        let canvas = find_one(&app, "CanvasArea::canvas-touch");
         let top_left = canvas.absolute_position();
         let window = app.window();
         let before = controller.borrow().document().clone();
@@ -762,7 +975,7 @@ mod gui_tests {
     #[test]
     fn scroll_event_zooms_the_canvas() {
         let (app, controller) = new_app_with_controller();
-        let canvas = find_one(&app, "AppWindow::canvas-touch");
+        let canvas = find_one(&app, "CanvasArea::canvas-touch");
         let top_left = canvas.absolute_position();
         let size = canvas.size();
         let center =
@@ -794,12 +1007,12 @@ mod gui_tests {
 
         let after_draw = controller.borrow().document().clone();
 
-        find_one(&app, "AppWindow::undo-btn").mock_single_click(PointerEventButton::Left);
+        find_one(&app, "LinuxChrome::undo-btn").mock_single_click(PointerEventButton::Left);
         assert!(!app.get_can_undo());
         assert!(app.get_can_redo());
         assert_ne!(controller.borrow().document(), &after_draw);
 
-        find_one(&app, "AppWindow::redo-btn").mock_single_click(PointerEventButton::Left);
+        find_one(&app, "LinuxChrome::redo-btn").mock_single_click(PointerEventButton::Left);
         assert!(app.get_can_undo());
         assert!(!app.get_can_redo());
         assert_eq!(controller.borrow().document(), &after_draw);
@@ -865,21 +1078,398 @@ mod gui_tests {
     fn the_tool_buttons_select_tools() {
         let (app, controller) = new_app_with_controller();
         let buttons: Vec<ElementHandle> =
-            ElementHandle::find_by_element_id(&app, "AppWindow::tool-btn").collect();
-        assert_eq!(buttons.len(), Tool::ALL.len());
+            ElementHandle::find_by_element_id(&app, "ToolButton::tool-btn").collect();
+        assert_eq!(buttons.len(), Tool::ALL.len(), "one button per tool in Tool::ALL");
 
-        buttons[2].mock_single_click(PointerEventButton::Left); // Fill
+        // The redesign groups the tools visually (select / stationaries /
+        // shapes), so document order no longer matches `Tool::ALL` order.
+        // Locating by accessible label keeps the original assertion —
+        // "clicking the Fill button selects the Fill tool" — while being
+        // independent of where the group happens to sit in the toolbar.
+        let fill = ElementHandle::find_by_accessible_label(&app, Tool::Fill.label())
+            .next()
+            .expect("the Fill tool button must be reachable by its accessible label");
+        fill.mock_single_click(PointerEventButton::Left);
         assert_eq!(controller.borrow().tool(), Tool::Fill);
         assert_eq!(app.get_selected_tool(), 2);
+    }
+
+    /// Counts elements carrying an exact accessible label.
+    fn labelled(app: &AppWindow, label: &str) -> usize {
+        ElementHandle::find_by_accessible_label(app, label).count()
+    }
+
+    fn switch_to_macos(app: &AppWindow) {
+        app.set_ui_style("macos".into());
+        relayout(app);
+    }
+
+    /// Forces a fresh layout pass. Conditional chrome (`if ui-style ==`,
+    /// `if is-fullscreen`) is instantiated lazily, and newly created items
+    /// have no geometry — and therefore do not appear in the element tree —
+    /// until layout runs again. Setting a *different* size guarantees that.
+    fn relayout(app: &AppWindow) {
+        // Two *different* sizes, unconditionally: a single set_size that
+        // happens to match the current size is a no-op, and then the newly
+        // instantiated items never receive geometry.
+        app.window().set_size(slint::PhysicalSize::new(1280, 900));
+        app.window().set_size(slint::PhysicalSize::new(1600, 1000));
+    }
+
+    #[test]
+    fn the_ui_style_property_switches_between_the_two_chrome_trees() {
+        let (app, _c) = new_app_with_controller();
+        // Linux-only: the ribbon tab strip.
+        assert_eq!(labelled(&app, "Home"), 1, "Linux chrome shows the ribbon tabs");
+        assert_eq!(labelled(&app, "Files"), 0, "the macOS Files menu is not in the Linux tree");
+
+        switch_to_macos(&app);
+
+        assert_eq!(labelled(&app, "Files"), 1, "macOS chrome shows the Files menu");
+        assert_eq!(labelled(&app, "Home"), 0, "the Linux ribbon is gone once macOS renders");
+    }
+
+    #[test]
+    fn the_macos_chrome_exposes_the_horizontal_tab_strip_from_the_sketch() {
+        // Per the maintainer's spec the macOS tabs are icons in a horizontal
+        // strip along the bottom edge, not a left-hand rail.
+        let (app, _c) = new_app_with_controller();
+        switch_to_macos(&app);
+        for tab in ["File", "Main", "Style", "Secondary", "Tool", "Command", "Layers", "AI"] {
+            assert!(labelled(&app, tab) >= 1, "macOS tab icon {tab:?} must be present");
+        }
+    }
+
+    #[test]
+    fn clicking_a_tab_icon_expands_its_panel_upward_and_closing_collapses_it() {
+        let (app, _c) = new_app_with_controller();
+        switch_to_macos(&app);
+
+        // Nothing expanded yet: the Layers panel is not in the tree.
+        assert_eq!(
+            ElementHandle::find_by_element_id(&app, "LayersPanel::layer-add-btn").count(),
+            0,
+            "no tab panel before any icon is clicked"
+        );
+
+        // Clicking the Layers icon expands its panel upward.
+        let layers_icon = ElementHandle::find_by_accessible_label(&app, "Layers")
+            .next()
+            .expect("the Layers tab icon must exist");
+        layers_icon.mock_single_click(PointerEventButton::Left);
+        relayout(&app);
+        assert_eq!(
+            ElementHandle::find_by_element_id(&app, "LayersPanel::layer-add-btn").count(),
+            1,
+            "the Layers panel expanded and shows its real layer controls"
+        );
+
+        // Switching tabs swaps the content in place.
+        let tool_icon = ElementHandle::find_by_accessible_label(&app, "Tool")
+            .next()
+            .expect("the Tool tab icon must exist");
+        tool_icon.mock_single_click(PointerEventButton::Left);
+        relayout(&app);
+        assert_eq!(
+            ElementHandle::find_by_element_id(&app, "LayersPanel::layer-add-btn").count(),
+            0,
+            "switching tabs replaced the Layers content"
+        );
+
+        // The panel's own close button collapses it.
+        ElementHandle::find_by_accessible_label(&app, "Close panel")
+            .next()
+            .expect("the expanded panel has a close button")
+            .mock_single_click(PointerEventButton::Left);
+        relayout(&app);
+        assert_eq!(
+            labelled(&app, "Close panel"),
+            0,
+            "closing the panel removes it from the tree"
+        );
+
+        // ...and clicking the same icon a second time also collapses it.
+        layers_icon.mock_single_click(PointerEventButton::Left);
+        relayout(&app);
+        assert_eq!(
+            ElementHandle::find_by_element_id(&app, "LayersPanel::layer-add-btn").count(),
+            1,
+            "re-clicking the Layers icon re-expands it"
+        );
+        layers_icon.mock_single_click(PointerEventButton::Left);
+        relayout(&app);
+        assert_eq!(
+            ElementHandle::find_by_element_id(&app, "LayersPanel::layer-add-btn").count(),
+            0,
+            "a second click on the same icon collapses it again"
+        );
+    }
+
+    #[test]
+    fn fullscreen_visibly_restructures_the_macos_chrome() {
+        // The maintainer asked to be able to *see* that windowed and
+        // fullscreen differ. Windowed merges Secondary into the Head bar
+        // and hides the pop-out affordances; fullscreen splits them out and
+        // reveals a pop-out control per vertical tab.
+        let (app, _c) = new_app_with_controller();
+        switch_to_macos(&app);
+
+        const POPOUT: &str = "Layers pop-out — WIP (not implemented yet)";
+
+        app.set_is_fullscreen(false);
+        relayout(&app);
+        assert_eq!(labelled(&app, POPOUT), 0, "no pop-out affordance while windowed");
+
+        app.set_is_fullscreen(true);
+        relayout(&app);
+        assert_eq!(labelled(&app, POPOUT), 1, "fullscreen reveals the pop-out affordance");
+
+        // ...and it goes away again, so this is a live binding rather than
+        // a one-way build-time branch.
+        app.set_is_fullscreen(false);
+        relayout(&app);
+        assert_eq!(labelled(&app, POPOUT), 0);
+    }
+
+    #[test]
+    fn the_fullscreen_toggle_drives_the_real_window_state() {
+        // Proves the toggle is wired to slint::Window rather than only
+        // flipping a UI flag: the property mirrors what the window reports.
+        let (app, _c) = new_app_with_controller();
+        wire_fullscreen(&app);
+        switch_to_macos(&app);
+
+        let before = app.window().is_fullscreen();
+        app.invoke_fullscreen_toggled();
+        assert_eq!(
+            app.get_is_fullscreen(),
+            app.window().is_fullscreen(),
+            "the UI property must mirror the window's actual state"
+        );
+        assert_ne!(app.window().is_fullscreen(), before, "the window state changed");
+    }
+
+    /// Wires settings with an in-memory "disk" so nothing touches the real
+    /// user config, and returns the handle to inspect what was saved.
+    fn wire_settings_capturing(
+        app: &AppWindow,
+        initial: settings::AppSettings,
+    ) -> Rc<RefCell<Vec<settings::AppSettings>>> {
+        let saved = Rc::new(RefCell::new(Vec::new()));
+        let sink = saved.clone();
+        wire_settings(app, initial, Rc::new(move |s| sink.borrow_mut().push(s.clone())));
+        saved
+    }
+
+    #[test]
+    fn the_settings_page_opens_and_closes() {
+        let (app, _c) = new_app_with_controller();
+        assert!(!app.get_settings_open());
+
+        // The chrome's Settings button raises `settings-clicked`; main()
+        // binds that to opening the panel, so bind it the same way here.
+        let w = app.as_weak();
+        app.on_settings_clicked(move || {
+            if let Some(a) = w.upgrade() {
+                a.set_settings_open(true);
+            }
+        });
+        ElementHandle::find_by_accessible_label(&app, "Settings")
+            .next()
+            .expect("a Settings button must exist in the chrome")
+            .mock_single_click(PointerEventButton::Left);
+        assert!(app.get_settings_open(), "clicking Settings opens the page");
+
+        relayout(&app);
+        ElementHandle::find_by_accessible_label(&app, "Close settings")
+            .next()
+            .expect("the settings page must have a close button")
+            .mock_single_click(PointerEventButton::Left);
+        assert!(!app.get_settings_open(), "closing the page hides it");
+    }
+
+    #[test]
+    fn changing_the_colour_scheme_design_and_text_style_applies_and_persists() {
+        let (app, _c) = new_app_with_controller();
+        let saved = wire_settings_capturing(&app, settings::AppSettings::default());
+        let theme = app.global::<Theme>();
+
+        let base_dark = theme.get_surface_base();
+        let accent_cyan = theme.get_accent();
+
+        // Colour scheme: dark -> light must change the surfaces.
+        app.set_set_scheme("light".into());
+        app.invoke_settings_changed();
+        assert_ne!(theme.get_surface_base(), base_dark, "light scheme changes surfaces");
+
+        // Colour design: cyanotype -> phosphor must change the accent hue.
+        app.set_set_design("phosphor".into());
+        app.invoke_settings_changed();
+        assert_ne!(theme.get_accent(), accent_cyan, "a new colour design changes the accent");
+
+        // Text style: the scale drives both text and row heights.
+        let body_normal = theme.get_text_body();
+        let row_normal = theme.get_row_toolbar();
+        app.set_set_text_style("comfortable".into());
+        app.invoke_settings_changed();
+        assert!(theme.get_text_body() > body_normal, "comfortable text is larger");
+        assert!(theme.get_row_toolbar() > row_normal, "rows grow so larger text cannot clip");
+
+        // Monospace labels.
+        app.set_set_mono_labels(true);
+        app.invoke_settings_changed();
+        assert_eq!(theme.get_label_font(), "monospace");
+
+        // Everything above was persisted, and the last write has all of it.
+        let last = saved.borrow().last().cloned().expect("settings were saved");
+        assert_eq!(last.theme, settings::Theme::Light);
+        assert_eq!(last.color_design, settings::ColorDesign::Phosphor);
+        assert_eq!(last.text_style, settings::TextStyle::Comfortable);
+        assert!(last.mono_labels);
+    }
+
+    #[test]
+    fn an_explicit_accent_overrides_the_design_and_an_empty_one_restores_it() {
+        let (app, _c) = new_app_with_controller();
+        let _saved = wire_settings_capturing(&app, settings::AppSettings::default());
+        let theme = app.global::<Theme>();
+        let design_accent = theme.get_accent();
+
+        app.set_set_accent("#FF0000".into());
+        app.invoke_settings_changed();
+        assert_eq!(theme.get_accent(), slint::Color::from_rgb_u8(255, 0, 0));
+
+        app.set_set_accent("".into());
+        app.invoke_settings_changed();
+        assert_eq!(theme.get_accent(), design_accent, "an empty accent follows the design again");
+    }
+
+    #[test]
+    fn a_nonsense_accent_is_discarded_without_disturbing_the_rest() {
+        let (app, _c) = new_app_with_controller();
+        let saved = wire_settings_capturing(&app, settings::AppSettings::default());
+
+        app.set_set_accent("not a colour".into());
+        app.set_set_design("amber".into());
+        app.invoke_settings_changed();
+
+        let last = saved.borrow().last().cloned().unwrap();
+        assert_eq!(last.accent_color, "", "the invalid accent was dropped");
+        assert_eq!(last.color_design, settings::ColorDesign::Amber, "the valid change survived");
+        // The form is rewritten with the sanitised value so it cannot keep
+        // displaying something that was rejected.
+        assert_eq!(app.get_set_accent(), "");
+    }
+
+    #[test]
+    fn switching_interface_style_in_settings_swaps_the_chrome_live() {
+        let (app, _c) = new_app_with_controller();
+        let _saved = wire_settings_capturing(&app, settings::AppSettings::default());
+
+        app.set_set_ui_style("linux".into());
+        app.invoke_settings_changed();
+        relayout(&app);
+        assert_eq!(app.get_ui_style(), "linux");
+        assert_eq!(labelled(&app, "Home"), 1, "the Linux ribbon is showing");
+
+        app.set_set_ui_style("macos".into());
+        app.invoke_settings_changed();
+        relayout(&app);
+        assert_eq!(app.get_ui_style(), "macos");
+        assert_eq!(labelled(&app, "Files"), 1, "the macOS chrome replaced it without a restart");
+    }
+
+    #[test]
+    fn the_first_run_dialog_appears_once_and_its_answer_is_persisted() {
+        let (app, _c) = new_app_with_controller();
+        let saved = wire_settings_capturing(&app, settings::AppSettings::default());
+
+        // A fresh install: no settings file means first run.
+        app.set_detected_platform("macOS".into());
+        app.set_first_run_open(true);
+        relayout(&app);
+        ElementHandle::find_by_accessible_label(&app, "Use macOS")
+            .next()
+            .expect("the dialog offers the detected platform")
+            .mock_single_click(PointerEventButton::Left);
+
+        assert!(!app.get_first_run_open(), "answering dismisses the dialog");
+        let last = saved.borrow().last().cloned().expect("the answer was persisted");
+        assert!(last.first_run_completed, "so it is never asked again");
+        assert_eq!(
+            last.ui_style,
+            settings::UiStyle::Auto,
+            "accepting the detected platform keeps Auto, so the same config still \
+             follows the OS on a different machine"
+        );
+    }
+
+    #[test]
+    fn picking_a_layout_explicitly_in_the_first_run_dialog_pins_it() {
+        let (app, _c) = new_app_with_controller();
+        let saved = wire_settings_capturing(&app, settings::AppSettings::default());
+        app.set_first_run_open(true);
+        relayout(&app);
+
+        ElementHandle::find_by_accessible_label(&app, "Use macOS layout")
+            .next()
+            .expect("the dialog offers an explicit macOS choice")
+            .mock_single_click(PointerEventButton::Left);
+
+        let last = saved.borrow().last().cloned().unwrap();
+        assert_eq!(last.ui_style, settings::UiStyle::MacOs, "an explicit pick is stored as such");
+        assert!(last.first_run_completed);
+    }
+
+    #[test]
+    fn the_settings_page_shows_every_documented_control() {
+        // Stands in for eyeballing the overlay: if a row or an option is
+        // dropped by a layout change, this fails instead of silently
+        // shipping a settings page with a missing control.
+        let (app, _c) = new_app_with_controller();
+        app.set_settings_open(true);
+
+        app.set_settings_tab(0);
+        relayout(&app);
+        for label in ["Basic", "Style", "Layout", "Close settings", "On", "Off"] {
+            assert!(labelled(&app, label) >= 1, "Basic tab is missing {label:?}");
+        }
+
+        app.set_settings_tab(1);
+        relayout(&app);
+        for label in [
+            "Auto", "Linux", "macOS",
+            "Dark", "Light", "High contrast",
+            "Cyanotype", "Graphite", "Amber", "Phosphor",
+            "Compact", "Normal", "Comfortable",
+            "14", "16", "20",
+        ] {
+            assert!(labelled(&app, label) >= 1, "Style tab is missing {label:?}");
+        }
+    }
+
+    #[test]
+    fn every_tool_button_is_labelled_for_assistive_technology() {
+        // The grouped layout is only navigable if each tool carries its
+        // name; this also guards the lookup the test above depends on.
+        let (app, _controller) = new_app_with_controller();
+        for tool in Tool::ALL {
+            assert_eq!(
+                ElementHandle::find_by_accessible_label(&app, tool.label()).count(),
+                1,
+                "exactly one labelled button for {:?}",
+                tool
+            );
+        }
     }
 
     #[test]
     fn the_brush_size_buttons_clamp_at_one() {
         let (app, controller) = new_app_with_controller();
-        find_one(&app, "AppWindow::brush-up-btn").mock_single_click(PointerEventButton::Left);
+        find_one(&app, "HomeToolbar::brush-up-btn").mock_single_click(PointerEventButton::Left);
         assert_eq!(controller.borrow().brush_size(), 2);
         for _ in 0..5 {
-            find_one(&app, "AppWindow::brush-down-btn")
+            find_one(&app, "HomeToolbar::brush-down-btn")
                 .mock_single_click(PointerEventButton::Left);
         }
         assert_eq!(controller.borrow().brush_size(), 1, "brush size never drops below 1");
@@ -891,7 +1481,7 @@ mod gui_tests {
         let (app, controller) = new_app_with_controller();
         app.invoke_palette_clicked(3);
         app.set_swatch_hex("#0a141e".into());
-        find_one(&app, "AppWindow::apply-swatch-btn").mock_single_click(PointerEventButton::Left);
+        find_one(&app, "HomeToolbar::apply-swatch-btn").mock_single_click(PointerEventButton::Left);
 
         assert_eq!(controller.borrow().palette()[3], [0x0a, 0x14, 0x1e, 0xff]);
         assert_eq!(controller.borrow().current_color(), [0x0a, 0x14, 0x1e, 0xff]);
@@ -913,7 +1503,7 @@ mod gui_tests {
         let (app, controller) = new_app_with_controller();
         let before = controller.borrow().palette()[0];
         app.set_swatch_hex("lavender".into());
-        find_one(&app, "AppWindow::apply-swatch-btn").mock_single_click(PointerEventButton::Left);
+        find_one(&app, "HomeToolbar::apply-swatch-btn").mock_single_click(PointerEventButton::Left);
 
         assert_eq!(controller.borrow().palette()[0], before);
         assert!(
@@ -929,7 +1519,7 @@ mod gui_tests {
         let (app, controller) = new_app_with_controller();
         assert_eq!(app.get_layers().row_count(), 1);
 
-        find_one(&app, "AppWindow::layer-add-btn").mock_single_click(PointerEventButton::Left);
+        find_one(&app, "LayersPanel::layer-add-btn").mock_single_click(PointerEventButton::Left);
         assert_eq!(app.get_layers().row_count(), 2);
         assert_eq!(app.get_active_layer(), 1);
         // Top-first display order: row 0 is the newest layer.
@@ -944,7 +1534,7 @@ mod gui_tests {
 
         // Hide the top layer via its checkbox (row 0 = layer index 1).
         let boxes: Vec<ElementHandle> =
-            ElementHandle::find_by_element_id(&app, "AppWindow::layer-visible-box").collect();
+            ElementHandle::find_by_element_id(&app, "LayersPanel::layer-visible-box").collect();
         assert_eq!(boxes.len(), 2);
         boxes[0].mock_single_click(PointerEventButton::Left);
         assert!(!controller.borrow().layer_visible(1));
@@ -953,7 +1543,7 @@ mod gui_tests {
             "hiding the layer must hide its pixels from the composite"
         );
 
-        find_one(&app, "AppWindow::layer-remove-btn").mock_single_click(PointerEventButton::Left);
+        find_one(&app, "LayersPanel::layer-remove-btn").mock_single_click(PointerEventButton::Left);
         assert_eq!(app.get_layers().row_count(), 1);
         assert!(app.get_status_message().contains("Layer deleted"));
     }
@@ -961,12 +1551,12 @@ mod gui_tests {
     #[test]
     fn selecting_a_layer_row_makes_it_active() {
         let (app, controller) = new_app_with_controller();
-        find_one(&app, "AppWindow::layer-add-btn").mock_single_click(PointerEventButton::Left);
+        find_one(&app, "LayersPanel::layer-add-btn").mock_single_click(PointerEventButton::Left);
         assert_eq!(controller.borrow().active_layer_index(), 1);
 
         // Row 1 in the top-first list is the bottom layer (index 0).
         let rows: Vec<ElementHandle> =
-            ElementHandle::find_by_element_id(&app, "AppWindow::layer-row-touch").collect();
+            ElementHandle::find_by_element_id(&app, "LayersPanel::layer-row-touch").collect();
         rows[1].mock_single_click(PointerEventButton::Left);
         assert_eq!(controller.borrow().active_layer_index(), 0);
         assert_eq!(app.get_active_layer(), 0);
@@ -975,7 +1565,7 @@ mod gui_tests {
     #[test]
     fn a_project_saved_from_the_ui_reopens_identically() {
         let (app, controller) = new_app_with_controller();
-        find_one(&app, "AppWindow::layer-add-btn").mock_single_click(PointerEventButton::Left);
+        find_one(&app, "LayersPanel::layer-add-btn").mock_single_click(PointerEventButton::Left);
         draw_one_pixel(&app, &controller);
         let expected = controller.borrow().document().content_hash();
 
@@ -1025,7 +1615,7 @@ mod gui_tests {
         assert_eq!(controller.borrow().tool(), Tool::Select);
         assert!(!app.get_has_selection());
 
-        let canvas = find_one(&app, "AppWindow::canvas-touch");
+        let canvas = find_one(&app, "CanvasArea::canvas-touch");
         let origin = canvas.absolute_position();
         let window = app.window();
         let start = LogicalPosition::new(origin.x + 16.0, origin.y + 16.0);
@@ -1042,7 +1632,7 @@ mod gui_tests {
         });
 
         assert!(app.get_has_selection(), "the marquee must be reflected in the UI");
-        find_one(&app, "AppWindow::deselect-btn").mock_single_click(PointerEventButton::Left);
+        find_one(&app, "HomeToolbar::deselect-btn").mock_single_click(PointerEventButton::Left);
         assert!(!app.get_has_selection());
     }
 
@@ -1055,11 +1645,11 @@ mod gui_tests {
         draw_one_pixel(&app, &controller);
         assert_eq!(painted_count(&controller), 1);
 
-        find_one(&app, "AppWindow::select-all-btn").mock_single_click(PointerEventButton::Left);
+        find_one(&app, "HomeToolbar::select-all-btn").mock_single_click(PointerEventButton::Left);
         assert!(app.get_has_selection());
         assert_eq!(controller.borrow().selection().unwrap().count(), 64 * 64);
 
-        find_one(&app, "AppWindow::delete-btn").mock_single_click(PointerEventButton::Left);
+        find_one(&app, "HomeToolbar::delete-btn").mock_single_click(PointerEventButton::Left);
         assert_eq!(painted_count(&controller), 0, "delete clears the selected pixels");
     }
 
@@ -1103,7 +1693,7 @@ mod gui_tests {
         refresh(&app, &controller.borrow());
         let ink = controller.borrow().document().get_pixel(0, 0).unwrap();
 
-        find_one(&app, "AppWindow::cut-btn").mock_single_click(PointerEventButton::Left);
+        find_one(&app, "HomeToolbar::cut-btn").mock_single_click(PointerEventButton::Left);
         assert!(app.get_has_clipboard());
         assert_eq!(painted_count(&controller), 0, "cut removes the source pixels");
 
@@ -1124,13 +1714,13 @@ mod gui_tests {
     fn copy_composite_sees_through_the_layer_stack() {
         let (app, controller) = new_app_with_controller();
         draw_one_pixel(&app, &controller);
-        find_one(&app, "AppWindow::layer-add-btn").mock_single_click(PointerEventButton::Left);
+        find_one(&app, "LayersPanel::layer-add-btn").mock_single_click(PointerEventButton::Left);
 
         // The active (new, empty) layer has nothing; an ordinary copy sees
         // nothing, a composite copy sees the layer underneath.
-        find_one(&app, "AppWindow::copy-btn").mock_single_click(PointerEventButton::Left);
+        find_one(&app, "HomeToolbar::copy-btn").mock_single_click(PointerEventButton::Left);
         let plain = controller.borrow().clipboard().unwrap().pixels.iter().any(|b| *b != 0);
-        find_one(&app, "AppWindow::copy-composite-btn")
+        find_one(&app, "HomeToolbar::copy-composite-btn")
             .mock_single_click(PointerEventButton::Left);
         let composite = controller.borrow().clipboard().unwrap().pixels.iter().any(|b| *b != 0);
 
@@ -1143,12 +1733,12 @@ mod gui_tests {
         let (app, controller) = new_app_with_controller();
         draw_one_pixel(&app, &controller);
 
-        find_one(&app, "AppWindow::layer-duplicate-btn")
+        find_one(&app, "LayersPanel::layer-duplicate-btn")
             .mock_single_click(PointerEventButton::Left);
         assert_eq!(app.get_layers().row_count(), 2);
 
         let before = controller.borrow().document().composite();
-        find_one(&app, "AppWindow::layer-merge-btn").mock_single_click(PointerEventButton::Left);
+        find_one(&app, "LayersPanel::layer-merge-btn").mock_single_click(PointerEventButton::Left);
         assert_eq!(app.get_layers().row_count(), 1);
         assert_eq!(
             controller.borrow().document().composite(),
@@ -1167,15 +1757,15 @@ mod gui_tests {
         }
         refresh(&app, &controller.borrow());
 
-        find_one(&app, "AppWindow::flip-h-btn").mock_single_click(PointerEventButton::Left);
+        find_one(&app, "HomeToolbar::flip-h-btn").mock_single_click(PointerEventButton::Left);
         assert_ne!(
             controller.borrow().document().get_pixel(3, 0).unwrap()[3],
             0,
             "flip moved the pixel across the selection box"
         );
 
-        find_one(&app, "AppWindow::rotate-btn").mock_single_click(PointerEventButton::Left);
-        find_one(&app, "AppWindow::crop-btn").mock_single_click(PointerEventButton::Left);
+        find_one(&app, "HomeToolbar::rotate-btn").mock_single_click(PointerEventButton::Left);
+        find_one(&app, "HomeToolbar::crop-btn").mock_single_click(PointerEventButton::Left);
         let doc = controller.borrow().document().clone();
         assert_eq!((doc.width(), doc.height()), (4, 4), "crop resized the canvas");
     }
@@ -1187,16 +1777,16 @@ mod gui_tests {
         let before = controller.borrow().document().clone();
 
         assert!(app.get_grid_on());
-        find_one(&app, "AppWindow::grid-btn").mock_single_click(PointerEventButton::Left);
+        find_one(&app, "LinuxChrome::grid-btn").mock_single_click(PointerEventButton::Left);
         assert!(!app.get_grid_on());
         assert!(!controller.borrow().should_draw_grid(), "the grid is off even at high zoom");
 
-        find_one(&app, "AppWindow::zoom-actual-btn").mock_single_click(PointerEventButton::Left);
+        find_one(&app, "LinuxChrome::zoom-actual-btn").mock_single_click(PointerEventButton::Left);
         assert_eq!(controller.borrow().zoom(), 1);
         assert_eq!(app.get_zoom_level(), 1);
 
         controller.borrow_mut().set_viewport(512, 512);
-        find_one(&app, "AppWindow::zoom-fit-btn").mock_single_click(PointerEventButton::Left);
+        find_one(&app, "LinuxChrome::zoom-fit-btn").mock_single_click(PointerEventButton::Left);
         assert_eq!(controller.borrow().viewport(), (512, 512));
         assert_eq!(controller.borrow().zoom(), 8, "64px canvas in a 512px viewport fits at 8x");
 
@@ -1357,3 +1947,6 @@ mod gui_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+
+

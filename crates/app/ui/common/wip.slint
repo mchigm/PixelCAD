@@ -1,0 +1,165 @@
+// The WIP primitive.
+//
+// Most of the maintainer's sketch describes features that do not exist yet.
+// The instruction was to leave them blank and warn "WIP" rather than hide
+// them or fake them, so this file defines the single treatment every such
+// control uses.
+//
+// Why dashed: in a drafting tool a dashed line already means "construction
+// geometry — drawn, not built", so the treatment reads correctly to this
+// audience without needing a legend. See docs/design/DESIGN_SYSTEM.md §6.
+
+import { Theme } from "theme.slint";
+
+// Slint has no `border-style`, so dashes are drawn as repeated segments.
+export component DashedBorder inherits Rectangle {
+    in property <color> stroke: Theme.line;
+    in property <length> dash: 4px;
+    in property <length> gap: 3px;
+
+    property <length> step: root.dash + root.gap;
+    property <int> h-count: Math.max(1, Math.floor(root.width / root.step));
+    property <int> v-count: Math.max(1, Math.floor(root.height / root.step));
+
+    for i in root.h-count: Rectangle {
+        x: i * root.step;
+        y: 0;
+        width: root.dash;
+        height: 1px;
+        background: root.stroke;
+    }
+    for i in root.h-count: Rectangle {
+        x: i * root.step;
+        y: parent.height - 1px;
+        width: root.dash;
+        height: 1px;
+        background: root.stroke;
+    }
+    for i in root.v-count: Rectangle {
+        x: 0;
+        y: i * root.step;
+        width: 1px;
+        height: root.dash;
+        background: root.stroke;
+    }
+    for i in root.v-count: Rectangle {
+        x: parent.width - 1px;
+        y: i * root.step;
+        width: 1px;
+        height: root.dash;
+        background: root.stroke;
+    }
+}
+
+// A control that exists in the design but has no implementation behind it.
+// It is deliberately focusable-looking but inert: no callback, no hover
+// lift, and an accessible label that states the situation outright.
+export component WipButton inherits Rectangle {
+    in property <string> label;
+    in property <image> icon;
+    in property <bool> show-label: true;
+    in property <length> min-w: 28px;
+
+    accessible-role: button;
+    accessible-label: root.label + " — WIP (not implemented yet)";
+    accessible-description: "This feature is part of the design but is not implemented yet.";
+    accessible-enabled: false;
+
+    min-width: root.min-w;
+    height: Theme.row-toolbar - 8px;
+    horizontal-stretch: 0;
+
+    content := Rectangle {
+        opacity: 0.55;
+        background: transparent;
+
+        DashedBorder {
+            stroke: Theme.line;
+        }
+
+        HorizontalLayout {
+            padding-left: Theme.space-2;
+            padding-right: Theme.space-2;
+            spacing: Theme.space-1;
+            alignment: center;
+
+            if root.icon.width > 0: Image {
+                source: root.icon;
+                colorize: Theme.text-muted;
+                width: Theme.icon-size;
+                height: Theme.icon-size;
+                vertical-alignment: center;
+            }
+            if root.show-label && root.label != "": Text {
+                text: root.label;
+                color: Theme.text-muted;
+                font-size: Theme.text-body;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+    }
+
+    // The amber marker. Kept outside the 0.55-opacity group so it stays
+    // legible at a glance across a toolbar full of these.
+    Rectangle {
+        x: parent.width - self.width - 2px;
+        y: 2px;
+        width: 5px;
+        height: 5px;
+        border-radius: 2.5px;
+        background: Theme.wip;
+    }
+}
+
+// A labelled placeholder for a whole panel or menu that does not exist yet.
+// Lists the sub-items the sketch specified, so the intended shape of the
+// feature survives in the UI rather than only in the design document.
+export component WipPanel inherits Rectangle {
+    in property <string> title;
+    in property <[string]> items;
+
+    accessible-role: none;
+
+    Rectangle {
+        background: Theme.surface-raised;
+        opacity: 0.55;
+        DashedBorder { stroke: Theme.line; }
+    }
+
+    VerticalLayout {
+        padding: Theme.space-3;
+        spacing: Theme.space-2;
+        alignment: start;
+
+        HorizontalLayout {
+            spacing: Theme.space-2;
+            Text {
+                text: root.title;
+                color: Theme.text-primary;
+                font-size: Theme.text-body;
+                font-weight: 600;
+            }
+            Rectangle {
+                width: 5px;
+                height: 5px;
+                y: 5px;
+                border-radius: 2.5px;
+                background: Theme.wip;
+            }
+            Text {
+                text: "WIP";
+                color: Theme.wip;
+                font-size: Theme.text-label;
+                vertical-alignment: center;
+            }
+        }
+
+        for item in root.items: Text {
+            text: "· " + item;
+            color: Theme.text-muted;
+            font-size: Theme.text-body;
+            overflow: elide;
+        }
+    }
+}

@@ -1,0 +1,197 @@
+// Interactive primitives shared by both chrome trees. State treatments
+// follow docs/design/DESIGN_SYSTEM.md §6.
+//
+// Every control here inherits `Rectangle` rather than using an implicit
+// root. An implicit, non-rendering root element is optimised away by the
+// Slint compiler, and its element id goes with it — which makes the control
+// invisible to `ElementHandle::find_by_element_id` and therefore untestable.
+// Inheriting a real item keeps the ids addressable from the headless tests.
+
+import { Theme } from "theme.slint";
+
+// An icon button. `active` marks the current tool/tab; `enabled: false`
+// means genuinely unavailable (e.g. Paste with an empty clipboard), which
+// is visually distinct from the WIP treatment in wip.slint.
+export component IconButton inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> active: false;
+    in property <bool> enabled: true;
+    in property <bool> show-label: false;
+    in property <length> box: 24px;
+
+    callback clicked();
+    callback right-clicked();
+
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+
+    min-width: root.show-label ? 0px : root.box;
+    height: root.box;
+    horizontal-stretch: 0;
+
+    background: root.active
+        ? Theme.accent-quiet
+        : (touch.has-hover && root.enabled ? Theme.accent-quiet.with-alpha(0.25) : transparent);
+    border-width: 1px;
+    border-color: root.active ? Theme.accent : transparent;
+    animate background { duration: 80ms; }
+
+    HorizontalLayout {
+        padding-left: root.show-label ? Theme.space-2 : 0px;
+        padding-right: root.show-label ? Theme.space-2 : 0px;
+        spacing: Theme.space-1;
+        alignment: center;
+
+        Image {
+            source: root.icon;
+            width: Theme.icon-size;
+            height: Theme.icon-size;
+            vertical-alignment: center;
+            colorize: !root.enabled
+                ? Theme.text-muted.with-alpha(0.4)
+                : (root.active ? Theme.accent : Theme.text-primary);
+        }
+        if root.show-label: Text {
+            text: root.label;
+            font-family: Theme.label-font;
+            font-size: Theme.text-body;
+            vertical-alignment: center;
+            // The button is the accessible element; without this the inner
+            // Text contributes a second node with the same implicit label.
+            accessible-role: none;
+            color: !root.enabled
+                ? Theme.text-muted.with-alpha(0.4)
+                : (root.active ? Theme.accent : Theme.text-primary);
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        pointer-event(e) => {
+            if (e.kind == PointerEventKind.down && e.button == PointerEventButton.right) {
+                root.right-clicked();
+            }
+        }
+        clicked => { root.clicked(); }
+    }
+}
+
+// A text button sized for the dense chrome, used where an icon would be
+// ambiguous (e.g. "1:1", "Fit").
+export component ChromeButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> active: false;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if (root.enabled) { root.clicked(); } }
+
+    height: 24px;
+    min-width: txt.preferred-width + 2 * Theme.space-2;
+    horizontal-stretch: 0;
+
+    background: root.active
+        ? Theme.accent-quiet
+        : (touch.has-hover && root.enabled ? Theme.accent-quiet.with-alpha(0.25) : transparent);
+    border-width: 1px;
+    border-color: root.active ? Theme.accent : Theme.line;
+    animate background { duration: 80ms; }
+
+    txt := Text {
+        text: root.label;
+        font-family: Theme.label-font;
+        font-size: Theme.text-body;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+        color: root.enabled
+            ? (root.active ? Theme.accent : Theme.text-primary)
+            : Theme.text-muted.with-alpha(0.4);
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => { root.clicked(); }
+    }
+}
+
+// One entry in the tool model.
+//
+// This exists as its own component rather than an inline `IconButton` so
+// that the sketch's three visual tool groups (select / stationaries /
+// shapes) can each render from the same `tool-labels` model: Slint forbids
+// a duplicated element id inside one component, but each instance of a
+// component carries its own id scope. That keeps exactly one stable
+// `tool-btn` id with one instance per tool.
+export component ToolButton inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> active: false;
+    in property <length> box: 32px;
+    callback clicked();
+
+    height: root.box;
+    min-width: root.box;
+    horizontal-stretch: 0;
+
+    tool-btn := IconButton {
+        icon: root.icon;
+        label: root.label;
+        active: root.active;
+        box: root.box;
+        clicked => { root.clicked(); }
+    }
+}
+
+// 1px hairlines. Panels are separated by rules, not shadows. The long axis
+// is left to the enclosing layout to stretch; a component root cannot read
+// `parent`, and relying on the layout is the correct Slint idiom anyway.
+export component HDivider inherits Rectangle {
+    background: Theme.line;
+    height: 1px;
+}
+
+export component VDivider inherits Rectangle {
+    background: Theme.line;
+    width: 1px;
+}
+
+// A labelled cluster of controls inside a toolbar, matching the sketch's
+// boxed groups ("Stationaries", "Shapes", "Colour & Tools", ...).
+export component ToolGroup inherits Rectangle {
+    in property <string> title;
+
+    VerticalLayout {
+        spacing: 2px;
+
+        HorizontalLayout {
+            alignment: start;
+            spacing: Theme.space-1;
+            @children
+        }
+
+        Text {
+            text: root.title;
+            color: Theme.text-muted;
+            font-family: Theme.label-font;
+            font-size: Theme.text-label;
+            horizontal-alignment: center;
+            accessible-role: none;
+        }
+    }
+}
+
+// A live numeric readout. Monospace so the digits do not jitter as values
+// update under the pointer — see DESIGN_SYSTEM.md §3.
+export component Readout inherits Text {
+    font-family: "monospace";
+    font-size: Theme.text-readout;
+    color: Theme.text-muted;
+    vertical-alignment: center;
+}

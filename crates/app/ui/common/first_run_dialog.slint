@@ -1,0 +1,103 @@
+// First-run platform confirmation.
+//
+// The maintainer asked that the interface style be *detected but confirmed*,
+// not silently imposed. This appears once, on the first launch with no
+// settings file, and never again: answering it writes
+// `first-run-completed = true`.
+//
+// Windows has no chrome of its own by design (Windows users run the Linux
+// build under WSL), so when detection falls back it says so here rather
+// than pretending the choice was intentional.
+
+import { Theme } from "theme.slint";
+import { ChromeButton } from "controls.slint";
+
+export component FirstRunDialog inherits Rectangle {
+    /// "macOS" or "Linux" — what was detected.
+    in property <string> detected;
+    /// True when the host is Windows and we fell back to the Linux chrome.
+    in property <bool> windows-fallback: false;
+
+    /// "detected" | "linux" | "macos"
+    callback answered(string);
+
+    background: #000000.with-alpha(0.55);
+
+    TouchArea { }
+
+    Rectangle {
+        width: Math.min(520px, parent.width - 2 * Theme.space-6);
+        height: self.preferred-height;
+        background: Theme.surface-raised;
+        border-width: 1px;
+        border-color: Theme.line;
+        border-radius: 4px;
+
+        VerticalLayout {
+            padding: Theme.space-4;
+            spacing: Theme.space-3;
+
+            Text {
+                text: "Choose an interface style";
+                color: Theme.text-primary;
+                font-size: Theme.text-heading;
+                font-weight: 600;
+            }
+
+            Text {
+                text: "PixelCAD detected " + root.detected + ". Its window layout follows "
+                    + root.detected + " conventions, and you can change this later in "
+                    + "Settings → Style.";
+                color: Theme.text-primary;
+                font-size: Theme.text-body;
+                wrap: word-wrap;
+            }
+
+            if root.windows-fallback: Rectangle {
+                height: self.preferred-height;
+                background: Theme.wip.with-alpha(0.15);
+                border-width: 1px;
+                border-color: Theme.wip;
+
+                VerticalLayout {
+                    padding: Theme.space-2;
+                    Text {
+                        text: "There is no Windows-specific layout yet. PixelCAD will use the "
+                            + "Linux one. For the intended experience, run the Linux build "
+                            + "under WSL.";
+                        color: Theme.text-primary;
+                        font-size: Theme.text-label;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: Theme.space-2;
+                alignment: start;
+
+                first-run-use-detected := ChromeButton {
+                    label: "Use " + root.detected;
+                    active: true;
+                    clicked => { root.answered("detected"); }
+                }
+                first-run-pick-linux := ChromeButton {
+                    label: "Use Linux layout";
+                    clicked => { root.answered("linux"); }
+                }
+                first-run-pick-macos := ChromeButton {
+                    label: "Use macOS layout";
+                    clicked => { root.answered("macos"); }
+                }
+            }
+
+            Text {
+                text: "Many features in this build are drawn but not implemented yet. "
+                    + "Those controls appear with a dashed outline and a WIP marker.";
+                color: Theme.text-muted;
+                font-size: Theme.text-label;
+                wrap: word-wrap;
+            }
+        }
+    }
+}

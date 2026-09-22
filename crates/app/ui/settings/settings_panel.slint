@@ -1,0 +1,405 @@
+// The Settings page, shown as an in-window modal overlay on both platforms.
+//
+// Tabs are built from the chrome's own ChromeButton rather than the
+// std-widgets TabWidget: TabWidget keeps inactive pages out of the
+// searchable element tree, which would make the settings untestable
+// headlessly (the same problem ScrollView caused for the toolbar).
+//
+// Every control writes straight into an in-out property and then raises
+// `changed()`. Rust persists and re-applies on that one signal, so there is
+// no Apply button to forget to press and no way for the visible UI and the
+// saved file to disagree.
+
+import { LineEdit } from "std-widgets.slint";
+import { Theme } from "../common/theme.slint";
+import { Icons } from "../common/icons.slint";
+import { IconButton, ChromeButton, HDivider, VDivider } from "../common/controls.slint";
+import { WipPanel } from "../common/wip.slint";
+
+// One labelled row of mutually exclusive choices.
+component ChoiceRow inherits Rectangle {
+    in property <string> label;
+    in property <string> hint;
+    in property <[string]> options;
+    in property <[string]> values;
+    in-out property <string> current;
+    callback changed();
+
+    height: self.preferred-height;
+
+    VerticalLayout {
+        spacing: 2px;
+
+        Text {
+            text: root.label;
+            color: Theme.text-primary;
+            font-family: Theme.label-font;
+            font-size: Theme.text-body;
+            font-weight: 600;
+        }
+        if root.hint != "": Text {
+            text: root.hint;
+            color: Theme.text-muted;
+            font-family: Theme.label-font;
+            font-size: Theme.text-label;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            spacing: Theme.space-1;
+            alignment: start;
+            for opt[i] in root.options: ChromeButton {
+                label: opt;
+                active: root.current == root.values[i];
+                clicked => {
+                    root.current = root.values[i];
+                    root.changed();
+                }
+            }
+        }
+    }
+}
+
+component ToggleRow inherits Rectangle {
+    in property <string> label;
+    in property <string> hint;
+    in-out property <bool> on;
+    callback changed();
+
+    height: self.preferred-height;
+
+    VerticalLayout {
+        spacing: 2px;
+        Text {
+            text: root.label;
+            color: Theme.text-primary;
+            font-family: Theme.label-font;
+            font-size: Theme.text-body;
+            font-weight: 600;
+        }
+        if root.hint != "": Text {
+            text: root.hint;
+            color: Theme.text-muted;
+            font-family: Theme.label-font;
+            font-size: Theme.text-label;
+            wrap: word-wrap;
+        }
+        HorizontalLayout {
+            spacing: Theme.space-1;
+            alignment: start;
+            ChromeButton {
+                label: "On";
+                active: root.on;
+                clicked => { root.on = true; root.changed(); }
+            }
+            ChromeButton {
+                label: "Off";
+                active: !root.on;
+                clicked => { root.on = false; root.changed(); }
+            }
+        }
+    }
+}
+
+export component SettingsPanel inherits Rectangle {
+    in property <bool> is-linux: true;
+
+    in-out property <string> ui-style-choice;
+    in-out property <string> scheme-choice;
+    in-out property <string> design-choice;
+    in-out property <string> text-style-choice;
+    in-out property <bool> mono-labels;
+    in-out property <string> accent-hex;
+    in-out property <string> icon-size-choice;
+
+    in-out property <string> canvas-w;
+    in-out property <string> canvas-h;
+    in-out property <bool> autosave;
+    in-out property <string> autosave-interval;
+    in-out property <bool> confirm-exit;
+    in-out property <string> recent-len;
+
+    /// 0 Basic, 1 Style, 2 Layout.
+    in-out property <int> tab: 1;
+
+    callback changed();
+    callback closed();
+
+    // Scrim. Clicking it closes, which is the behaviour people expect of a
+    // modal overlay.
+    background: #000000.with-alpha(0.45);
+
+    scrim-touch := TouchArea {
+        clicked => { root.closed(); }
+    }
+
+    Rectangle {
+        width: Math.min(620px, parent.width - 2 * Theme.space-6);
+        height: Math.min(560px, parent.height - 2 * Theme.space-6);
+        background: Theme.surface-raised;
+        border-width: 1px;
+        border-color: Theme.line;
+        border-radius: 4px;
+
+        // Swallow clicks so they do not reach the scrim behind.
+        TouchArea { }
+
+        VerticalLayout {
+            padding: Theme.space-4;
+            spacing: Theme.space-3;
+
+            HorizontalLayout {
+                spacing: Theme.space-2;
+                Text {
+                    text: "Settings";
+                    color: Theme.text-primary;
+                    font-family: Theme.label-font;
+                    font-size: Theme.text-heading;
+                    font-weight: 600;
+                    horizontal-stretch: 1;
+                }
+                settings-close-btn := IconButton {
+                    icon: Icons.close;
+                    label: "Close settings";
+                    clicked => { root.closed(); }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: Theme.space-1;
+                alignment: start;
+                settings-tab-basic := ChromeButton {
+                    label: "Basic";
+                    active: root.tab == 0;
+                    clicked => { root.tab = 0; }
+                }
+                settings-tab-style := ChromeButton {
+                    label: "Style";
+                    active: root.tab == 1;
+                    clicked => { root.tab = 1; }
+                }
+                settings-tab-layout := ChromeButton {
+                    label: "Layout";
+                    active: root.tab == 2;
+                    clicked => { root.tab = 2; }
+                }
+            }
+
+            HDivider { }
+
+            // ---------------------------------------------------- Basic
+            if root.tab == 0: VerticalLayout {
+                spacing: Theme.space-3;
+                alignment: start;
+
+                Text {
+                    text: "New canvas size";
+                    color: Theme.text-primary;
+                    font-family: Theme.label-font;
+                    font-size: Theme.text-body;
+                    font-weight: 600;
+                }
+                HorizontalLayout {
+                    spacing: Theme.space-2;
+                    alignment: start;
+                    LineEdit {
+                        text <=> root.canvas-w;
+                        width: 72px;
+                        height: 26px;
+                        edited => { root.changed(); }
+                    }
+                    Text {
+                        text: "x";
+                        color: Theme.text-muted;
+                        font-size: Theme.text-body;
+                        vertical-alignment: center;
+                    }
+                    LineEdit {
+                        text <=> root.canvas-h;
+                        width: 72px;
+                        height: 26px;
+                        edited => { root.changed(); }
+                    }
+                    Text {
+                        text: "pixels";
+                        color: Theme.text-muted;
+                        font-size: Theme.text-label;
+                        vertical-alignment: center;
+                    }
+                }
+
+                ToggleRow {
+                    label: "Autosave";
+                    hint: "Saves the open project on a timer.";
+                    on <=> root.autosave;
+                    changed => { root.changed(); }
+                }
+                HorizontalLayout {
+                    spacing: Theme.space-2;
+                    alignment: start;
+                    Text {
+                        text: "Autosave interval (seconds)";
+                        color: Theme.text-muted;
+                        font-size: Theme.text-label;
+                        vertical-alignment: center;
+                    }
+                    LineEdit {
+                        text <=> root.autosave-interval;
+                        width: 72px;
+                        height: 26px;
+                        edited => { root.changed(); }
+                    }
+                }
+
+                ToggleRow {
+                    label: "Confirm before closing";
+                    hint: "Asks before discarding unsaved work.";
+                    on <=> root.confirm-exit;
+                    changed => { root.changed(); }
+                }
+
+                HorizontalLayout {
+                    spacing: Theme.space-2;
+                    alignment: start;
+                    Text {
+                        text: "Recent files remembered";
+                        color: Theme.text-muted;
+                        font-size: Theme.text-label;
+                        vertical-alignment: center;
+                    }
+                    LineEdit {
+                        text <=> root.recent-len;
+                        width: 56px;
+                        height: 26px;
+                        edited => { root.changed(); }
+                    }
+                }
+            }
+
+            // ---------------------------------------------------- Style
+            if root.tab == 1: VerticalLayout {
+                spacing: Theme.space-3;
+                alignment: start;
+
+                ChoiceRow {
+                    label: "Interface style";
+                    hint: "Which window layout to use. Auto follows this computer's operating system.";
+                    options: ["Auto", "Linux", "macOS"];
+                    values: ["auto", "linux", "macos"];
+                    current <=> root.ui-style-choice;
+                    changed => { root.changed(); }
+                }
+
+                ChoiceRow {
+                    label: "Colour scheme";
+                    hint: "High contrast raises text and border contrast for low-light or low-vision use.";
+                    options: ["Dark", "Light", "High contrast"];
+                    values: ["dark", "light", "high-contrast"];
+                    current <=> root.scheme-choice;
+                    changed => { root.changed(); }
+                }
+
+                ChoiceRow {
+                    label: "Colour design";
+                    hint: "Cyanotype is blueprint cyan. Graphite is neutral pencil grey. Amber is a drafting lamp. Phosphor is a green terminal.";
+                    options: ["Cyanotype", "Graphite", "Amber", "Phosphor"];
+                    values: ["cyanotype", "graphite", "amber", "phosphor"];
+                    current <=> root.design-choice;
+                    changed => { root.changed(); }
+                }
+
+                ChoiceRow {
+                    label: "Text style";
+                    hint: "Scales every label and grows the toolbars to match.";
+                    options: ["Compact", "Normal", "Comfortable"];
+                    values: ["compact", "normal", "comfortable"];
+                    current <=> root.text-style-choice;
+                    changed => { root.changed(); }
+                }
+
+                ToggleRow {
+                    label: "Monospace labels";
+                    hint: "Numeric readouts are always monospace; this applies it to labels too.";
+                    on <=> root.mono-labels;
+                    changed => { root.changed(); }
+                }
+
+                ChoiceRow {
+                    label: "Icon size";
+                    options: ["14", "16", "20"];
+                    values: ["14", "16", "20"];
+                    current <=> root.icon-size-choice;
+                    changed => { root.changed(); }
+                }
+
+                VerticalLayout {
+                    spacing: 2px;
+                    Text {
+                        text: "Accent colour";
+                        color: Theme.text-primary;
+                        font-family: Theme.label-font;
+                        font-size: Theme.text-body;
+                        font-weight: 600;
+                    }
+                    Text {
+                        text: "Hex like #3FA7D6. Leave empty to use the colour design's own accent.";
+                        color: Theme.text-muted;
+                        font-family: Theme.label-font;
+                        font-size: Theme.text-label;
+                        wrap: word-wrap;
+                    }
+                    HorizontalLayout {
+                        spacing: Theme.space-2;
+                        alignment: start;
+                        accent-edit := LineEdit {
+                            text <=> root.accent-hex;
+                            width: 120px;
+                            height: 26px;
+                            placeholder-text: "#3FA7D6";
+                            edited => { root.changed(); }
+                        }
+                        // Live preview of the accent actually in use.
+                        Rectangle {
+                            width: 26px;
+                            height: 26px;
+                            background: Theme.accent;
+                            border-width: 1px;
+                            border-color: Theme.line;
+                        }
+                    }
+                }
+            }
+
+            // --------------------------------------------------- Layout
+            if root.tab == 2: VerticalLayout {
+                spacing: Theme.space-3;
+                alignment: start;
+
+                if root.is-linux: WipPanel {
+                    title: "Rearrange interface items";
+                    items: [
+                        "Drag toolbars and panels to new positions",
+                        "Save and load layout presets",
+                        "Planned for Linux — see ROADMAP.md",
+                    ];
+                }
+                if !root.is-linux: WipPanel {
+                    title: "Show or hide interface items";
+                    items: [
+                        "macOS can add or remove items, not reposition them",
+                        "Planned — see ROADMAP.md",
+                    ];
+                }
+
+                Text {
+                    text: root.is-linux
+                        ? "Linux will be able to move items freely. That work is scheduled, not shipped."
+                        : "On macOS, items can be added or removed but not repositioned.";
+                    color: Theme.text-muted;
+                    font-family: Theme.label-font;
+                    font-size: Theme.text-label;
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+}

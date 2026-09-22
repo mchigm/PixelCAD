@@ -1,0 +1,674 @@
+// macOS chrome: the same content as the Linux tree, arranged the macOS way.
+//
+// The native title bar is deliberately left in place (main.slint never sets
+// `no-frame`), so the traffic lights stay where macOS puts them and the
+// sketch's "Head" bar is an ordinary in-content bar below them.
+//
+// Tabs, per the maintainer's spec: the eight tab **icons sit in a
+// horizontal strip** along the bottom edge, and clicking one **expands its
+// panel vertically** upward from the strip (dock-style). Clicking the icon
+// again, or the panel's close button, collapses it. Clicking a different
+// icon switches the panel content in place.
+//
+// Windowed vs fullscreen:
+//   windowed   - Head and Secondary are combined into one bar.
+//   fullscreen - Secondary separates onto its own row, and each tab icon
+//                gains a "pop out as miniwindow" affordance.
+// The pop-out itself is not implemented (it needs real multi-window
+// support), so those controls use the WIP treatment - but the layout change
+// is real and driven by the actual window state.
+
+import { LineEdit } from "std-widgets.slint";
+import { Theme } from "../common/theme.slint";
+import { Icons } from "../common/icons.slint";
+import { LayerRow } from "../common/types.slint";
+import { IconButton, ChromeButton, HDivider, VDivider, Readout } from "../common/controls.slint";
+import { WipButton, WipPanel } from "../common/wip.slint";
+import { CanvasArea } from "../common/canvas.slint";
+import { LayersPanel } from "../common/layers_panel.slint";
+import { HomeToolbar } from "../common/home_toolbar.slint";
+
+// Save / Undo / Redo / Files. Lives in its own component because it is
+// mounted in two different places depending on window state, and Slint
+// forbids reusing element ids within one component.
+component SecondaryControls inherits Rectangle {
+    in property <bool> can-undo;
+    in property <bool> can-redo;
+    in property <string> project-path;
+    in-out property <bool> files-menu-open;
+
+    callback save-clicked();
+    callback undo-clicked();
+    callback redo-clicked();
+    callback files-toggled();
+
+    height: Theme.row-toolbar - 4px;
+    horizontal-stretch: 0;
+
+    HorizontalLayout {
+        spacing: Theme.space-1;
+        alignment: start;
+
+        mac-save-btn := IconButton {
+            icon: Icons.save;
+            label: "Save";
+            clicked => { root.save-clicked(); }
+        }
+        mac-undo-btn := IconButton {
+            icon: Icons.undo;
+            label: "Undo";
+            enabled: root.can-undo;
+            clicked => { root.undo-clicked(); }
+        }
+        mac-redo-btn := IconButton {
+            icon: Icons.redo;
+            label: "Redo";
+            enabled: root.can-redo;
+            clicked => { root.redo-clicked(); }
+        }
+        mac-files-btn := ChromeButton {
+            label: "Files";
+            active: root.files-menu-open;
+            clicked => { root.files-toggled(); }
+        }
+    }
+}
+
+// One icon in the horizontal tab strip. The pop-out affordance only appears
+// in fullscreen, per the spec; it is WIP because real multi-window support
+// does not exist yet.
+component TabDockIcon inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    in property <bool> active: false;
+    in property <bool> show-popout: false;
+    callback clicked();
+
+    width: 34px;
+    height: Theme.row-tail;
+    horizontal-stretch: 0;
+
+    dock-icon-btn := IconButton {
+        icon: root.icon;
+        label: root.label;
+        active: root.active;
+        box: Theme.row-tail;
+        clicked => { root.clicked(); }
+    }
+
+    // Fullscreen-only: a small marker above the icon showing that this tab
+    // will one day be able to pop out into its own miniwindow.
+    if root.show-popout: popout-wip := WipButton {
+        x: parent.width - 10px;
+        y: 0px;
+        width: 9px;
+        height: 9px;
+        label: root.label + " pop-out";
+        show-label: false;
+        min-w: 9px;
+    }
+}
+
+export component MacOsChrome {
+    in property <image> canvas-image;
+    in property <int> canvas-display-width;
+    in property <int> canvas-display-height;
+    in property <float> pan-x;
+    in property <float> pan-y;
+    in property <bool> space-held;
+    in property <int> zoom-level;
+
+    in property <[string]> tool-labels;
+    in property <int> selected-tool;
+    in property <int> brush-size;
+    in property <string> brush-shape;
+    in property <int> tolerance;
+    in property <int> stroke-opacity;
+    in property <[color]> palette-colors;
+    in property <int> selected-index;
+    in property <[color]> recent-colors;
+    in property <bool> has-selection;
+    in property <bool> has-clipboard;
+    in property <bool> grid-on;
+
+    in property <[LayerRow]> layers;
+    in property <int> active-layer;
+
+    in property <bool> can-undo;
+    in property <bool> can-redo;
+    in property <string> status-message;
+    in property <bool> is-fullscreen: false;
+    in-out property <string> project-path;
+    in-out property <string> save-path;
+    in-out property <string> swatch-hex;
+    in-out property <string> text-input;
+    in-out property <string> size-w;
+    in-out property <string> size-h;
+
+    /// Which tab is selected in the bottom icon strip: 0 File, 1 Main,
+    /// 2 Style, 3 Secondary, 4 Tool, 5 Command, 6 Layers, 7 AI.
+    in-out property <int> active-tab: 1;
+    /// Whether the active tab's panel is expanded upward.
+    in-out property <bool> tab-open: false;
+    /// Whether the "Files" menu is expanded.
+    in-out property <bool> files-menu-open: false;
+
+    /// Height of the panel that expands above the icon strip.
+    property <length> panel-height: 320px;
+
+    callback pencil-down(float, float);
+    callback pan-down(float, float);
+    callback pointer-moved(float, float);
+    callback pointer-released();
+    callback canvas-scrolled(float);
+    callback viewport-resized(float, float);
+    callback tool-selected(int);
+    callback brush-size-changed(int);
+    callback brush-shape-toggled();
+    callback tolerance-changed(int);
+    callback stroke-opacity-changed(int);
+    callback palette-clicked(int);
+    callback recent-clicked(int);
+    callback swatch-applied(string);
+    callback cut-clicked();
+    callback copy-clicked();
+    callback copy-composite-clicked();
+    callback paste-clicked();
+    callback delete-clicked();
+    callback select-all-clicked();
+    callback selection-cleared();
+    callback crop-clicked();
+    callback rotate-clicked();
+    callback flip-clicked(string);
+    callback resize-canvas-clicked(string, string);
+    callback scale-selection-clicked(string, string);
+    callback text-changed(string);
+    callback undo-clicked();
+    callback redo-clicked();
+    callback save-clicked(string);
+    callback save-project-clicked(string);
+    callback open-project-clicked(string);
+    callback layer-add-clicked();
+    callback layer-remove-clicked();
+    callback layer-selected(int);
+    callback layer-visibility-toggled(int);
+    callback layer-duplicate-clicked();
+    callback layer-merge-clicked();
+    callback layer-up-clicked();
+    callback layer-down-clicked();
+    callback grid-toggled();
+    callback zoom-fit-clicked();
+    callback zoom-actual-clicked();
+    callback settings-clicked();
+    callback fullscreen-toggled();
+
+    function select-tab(i: int) {
+        if (root.active-tab == i && root.tab-open) {
+            root.tab-open = false;
+        } else {
+            root.active-tab = i;
+            root.tab-open = true;
+        }
+    }
+
+    pure function tab-name(i: int) -> string {
+        return i == 0 ? "File"
+            : i == 1 ? "Main"
+            : i == 2 ? "Style"
+            : i == 3 ? "Secondary"
+            : i == 4 ? "Tool"
+            : i == 5 ? "Command"
+            : i == 6 ? "Layers"
+            : "AI";
+    }
+
+    Rectangle {
+        background: Theme.surface-base;
+
+        VerticalLayout {
+            spacing: 0;
+
+            // ===================================================== Head
+            head-bar := Rectangle {
+                height: Theme.row-toolbar;
+                background: Theme.surface-raised;
+
+                HorizontalLayout {
+                    padding-left: Theme.space-3;
+                    padding-right: Theme.space-3;
+                    spacing: Theme.space-2;
+                    alignment: start;
+
+                    Text {
+                        text: "PixelCAD";
+                        color: Theme.text-primary;
+                        font-family: Theme.label-font;
+                        font-size: Theme.text-title;
+                        font-weight: 500;
+                        vertical-alignment: center;
+                    }
+
+                    VDivider { }
+
+                    Text {
+                        text: root.project-path;
+                        color: Theme.text-muted;
+                        font-family: Theme.label-font;
+                        font-size: Theme.text-body;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+
+                    // In windowed mode the Secondary controls live here,
+                    // combined with the Head. In fullscreen they move to
+                    // their own row below.
+                    if !root.is-fullscreen: HorizontalLayout {
+                        spacing: Theme.space-2;
+                        alignment: end;
+                        SecondaryControls {
+                            can-undo: root.can-undo;
+                            can-redo: root.can-redo;
+                            files-menu-open <=> root.files-menu-open;
+                            project-path: root.project-path;
+                            save-clicked() => { root.save-project-clicked(root.project-path); }
+                            undo-clicked() => { root.undo-clicked(); }
+                            redo-clicked() => { root.redo-clicked(); }
+                            files-toggled() => { root.files-menu-open = !root.files-menu-open; }
+                        }
+                    }
+
+                    fullscreen-btn := IconButton {
+                        icon: root.is-fullscreen ? Icons.minimize : Icons.maximize;
+                        label: root.is-fullscreen ? "Leave fullscreen" : "Enter fullscreen";
+                        clicked => { root.fullscreen-toggled(); }
+                    }
+                    macos-settings-btn := IconButton {
+                        icon: Icons.settings;
+                        label: "Settings";
+                        clicked => { root.settings-clicked(); }
+                    }
+                }
+            }
+
+            HDivider { }
+
+            // ================================ Secondary (fullscreen only)
+            if root.is-fullscreen: secondary-bar := Rectangle {
+                height: Theme.row-toolbar;
+                background: Theme.surface-base;
+
+                HorizontalLayout {
+                    padding-left: Theme.space-3;
+                    spacing: Theme.space-2;
+                    alignment: start;
+
+                    SecondaryControls {
+                        can-undo: root.can-undo;
+                        can-redo: root.can-redo;
+                        files-menu-open <=> root.files-menu-open;
+                        project-path: root.project-path;
+                        save-clicked() => { root.save-project-clicked(root.project-path); }
+                        undo-clicked() => { root.undo-clicked(); }
+                        redo-clicked() => { root.redo-clicked(); }
+                        files-toggled() => { root.files-menu-open = !root.files-menu-open; }
+                    }
+
+                    Text {
+                        text: root.status-message;
+                        color: Theme.text-muted;
+                        font-family: Theme.label-font;
+                        font-size: Theme.text-body;
+                        vertical-alignment: center;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+                }
+            }
+            if root.is-fullscreen: HDivider { }
+
+            // Expanded "Files" menu. Open/Save exist; the rest do not.
+            if root.files-menu-open: files-menu := Rectangle {
+                height: 64px;
+                background: Theme.surface-raised;
+
+                HorizontalLayout {
+                    padding: Theme.space-2;
+                    spacing: Theme.space-2;
+                    alignment: start;
+
+                    files-open-btn := ChromeButton {
+                        label: "Open";
+                        clicked => { root.open-project-clicked(root.project-path); }
+                    }
+                    files-save-btn := ChromeButton {
+                        label: "Save project";
+                        clicked => { root.save-project-clicked(root.project-path); }
+                    }
+                    files-path-edit := LineEdit {
+                        text <=> root.project-path;
+                        width: 220px;
+                        height: 24px;
+                    }
+                    files-script-edit := LineEdit {
+                        text <=> root.save-path;
+                        width: 150px;
+                        height: 24px;
+                    }
+                    files-save-script-btn := ChromeButton {
+                        label: "Save script";
+                        clicked => { root.save-clicked(root.save-path); }
+                    }
+                    VDivider { }
+                    files-new-wip := WipButton { label: "New"; icon: Icons.file; }
+                    files-export-wip := WipButton { label: "Export"; icon: Icons.external; }
+                    files-recent-wip := WipButton { label: "Recent"; icon: Icons.files; }
+                }
+            }
+
+            // =================================== canvas column (full width)
+            VerticalLayout {
+                spacing: 0;
+                vertical-stretch: 1;
+
+                // Scrolled rather than stretched: the toolbar is wide, and
+                // without this its minimum width would squeeze the window.
+                Flickable {
+                    height: 76px;
+                    min-width: 0px;
+                    content-width: 1360px;
+                    content-height: 76px;
+                    HomeToolbar {
+                        x: 0;
+                        width: 1360px;
+                        tool-labels: root.tool-labels;
+                        selected-tool: root.selected-tool;
+                        brush-size: root.brush-size;
+                        brush-shape: root.brush-shape;
+                        tolerance: root.tolerance;
+                        stroke-opacity: root.stroke-opacity;
+                        palette-colors: root.palette-colors;
+                        selected-index: root.selected-index;
+                        recent-colors: root.recent-colors;
+                        has-selection: root.has-selection;
+                        has-clipboard: root.has-clipboard;
+                        swatch-hex <=> root.swatch-hex;
+                        text-input <=> root.text-input;
+                        size-w <=> root.size-w;
+                        size-h <=> root.size-h;
+
+                        tool-selected(i) => { root.tool-selected(i); }
+                        brush-size-changed(v) => { root.brush-size-changed(v); }
+                        brush-shape-toggled() => { root.brush-shape-toggled(); }
+                        tolerance-changed(v) => { root.tolerance-changed(v); }
+                        stroke-opacity-changed(v) => { root.stroke-opacity-changed(v); }
+                        palette-clicked(i) => { root.palette-clicked(i); }
+                        recent-clicked(i) => { root.recent-clicked(i); }
+                        swatch-applied(h) => { root.swatch-applied(h); }
+                        cut-clicked() => { root.cut-clicked(); }
+                        copy-clicked() => { root.copy-clicked(); }
+                        copy-composite-clicked() => { root.copy-composite-clicked(); }
+                        paste-clicked() => { root.paste-clicked(); }
+                        delete-clicked() => { root.delete-clicked(); }
+                        select-all-clicked() => { root.select-all-clicked(); }
+                        selection-cleared() => { root.selection-cleared(); }
+                        crop-clicked() => { root.crop-clicked(); }
+                        rotate-clicked() => { root.rotate-clicked(); }
+                        flip-clicked(a) => { root.flip-clicked(a); }
+                        resize-canvas-clicked(w, h) => { root.resize-canvas-clicked(w, h); }
+                        text-changed(t) => { root.text-changed(t); }
+                    }
+                }
+
+                HDivider { }
+
+                mac-canvas := CanvasArea {
+                    vertical-stretch: 1;
+                    canvas-image: root.canvas-image;
+                    canvas-display-width: root.canvas-display-width;
+                    canvas-display-height: root.canvas-display-height;
+                    pan-x: root.pan-x;
+                    pan-y: root.pan-y;
+                    space-held: root.space-held;
+                    zoom-level: root.zoom-level;
+
+                    pencil-down(x, y) => { root.pencil-down(x, y); }
+                    pan-down(x, y) => { root.pan-down(x, y); }
+                    pointer-moved(x, y) => { root.pointer-moved(x, y); }
+                    pointer-released() => { root.pointer-released(); }
+                    canvas-scrolled(d) => { root.canvas-scrolled(d); }
+                    viewport-resized(w, h) => { root.viewport-resized(w, h); }
+                }
+
+                HDivider { }
+
+                // ======================= bottom bar: icon strip + controls
+                Rectangle {
+                    height: Theme.row-tail + 4px;
+                    background: Theme.surface-raised;
+
+                    HorizontalLayout {
+                        padding-left: Theme.space-1;
+                        padding-right: Theme.space-1;
+                        spacing: Theme.space-1;
+                        alignment: start;
+
+                        // The horizontal tab strip.
+                        TabDockIcon {
+                            icon: Icons.folder-tree;
+                            label: "File";
+                            active: root.active-tab == 0 && root.tab-open;
+                            show-popout: root.is-fullscreen;
+                            clicked => { root.select-tab(0); }
+                        }
+                        TabDockIcon {
+                            icon: Icons.brush;
+                            label: "Main";
+                            active: root.active-tab == 1 && root.tab-open;
+                            show-popout: root.is-fullscreen;
+                            clicked => { root.select-tab(1); }
+                        }
+                        TabDockIcon {
+                            icon: Icons.baseline;
+                            label: "Style";
+                            active: root.active-tab == 2 && root.tab-open;
+                            show-popout: root.is-fullscreen;
+                            clicked => { root.select-tab(2); }
+                        }
+                        TabDockIcon {
+                            icon: Icons.panel-bottom;
+                            label: "Secondary";
+                            active: root.active-tab == 3 && root.tab-open;
+                            show-popout: root.is-fullscreen;
+                            clicked => { root.select-tab(3); }
+                        }
+                        TabDockIcon {
+                            icon: Icons.search;
+                            label: "Tool";
+                            active: root.active-tab == 4 && root.tab-open;
+                            show-popout: root.is-fullscreen;
+                            clicked => { root.select-tab(4); }
+                        }
+                        TabDockIcon {
+                            icon: Icons.terminal;
+                            label: "Command";
+                            active: root.active-tab == 5 && root.tab-open;
+                            show-popout: root.is-fullscreen;
+                            clicked => { root.select-tab(5); }
+                        }
+                        TabDockIcon {
+                            icon: Icons.layers;
+                            label: "Layers";
+                            active: root.active-tab == 6 && root.tab-open;
+                            show-popout: root.is-fullscreen;
+                            clicked => { root.select-tab(6); }
+                        }
+                        TabDockIcon {
+                            icon: Icons.ai;
+                            label: "AI";
+                            active: root.active-tab == 7 && root.tab-open;
+                            show-popout: root.is-fullscreen;
+                            clicked => { root.select-tab(7); }
+                        }
+
+                        VDivider { }
+
+                        Readout {
+                            text: mac-canvas.cursor-inside
+                                ? "x " + mac-canvas.cursor-x + "  y " + mac-canvas.cursor-y
+                                : "x —  y —";
+                        }
+                        VDivider { }
+                        mac-select-mode-btn := IconButton {
+                            icon: Icons.pointer;
+                            label: "Select mode";
+                            active: root.selected-tool == 10;
+                            box: Theme.row-tail;
+                            clicked => { root.tool-selected(10); }
+                        }
+                        mac-grid-btn := ChromeButton {
+                            label: root.grid-on ? "Grid on" : "Grid off";
+                            active: root.grid-on;
+                            clicked => { root.grid-toggled(); }
+                        }
+                        mac-w-edit := LineEdit {
+                            text <=> root.size-w;
+                            width: 52px;
+                            height: 22px;
+                        }
+                        mac-h-edit := LineEdit {
+                            text <=> root.size-h;
+                            width: 52px;
+                            height: 22px;
+                        }
+                        mac-resize-btn := ChromeButton {
+                            label: "Resize";
+                            clicked => { root.resize-canvas-clicked(root.size-w, root.size-h); }
+                        }
+                        mac-scale-sel-btn := ChromeButton {
+                            label: "Scale sel";
+                            enabled: root.has-selection;
+                            clicked => { root.scale-selection-clicked(root.size-w, root.size-h); }
+                        }
+
+                        Rectangle { horizontal-stretch: 1; }
+
+                        mac-zoom-out-btn := IconButton {
+                            icon: Icons.zoom-out;
+                            label: "Zoom out";
+                            box: Theme.row-tail;
+                            clicked => { root.canvas-scrolled(-1.0); }
+                        }
+                        Readout { text: root.zoom-level + "00%"; }
+                        mac-zoom-in-btn := IconButton {
+                            icon: Icons.zoom-in;
+                            label: "Zoom in";
+                            box: Theme.row-tail;
+                            clicked => { root.canvas-scrolled(1.0); }
+                        }
+                        mac-zoom-fit-btn := ChromeButton {
+                            label: "Fit";
+                            clicked => { root.zoom-fit-clicked(); }
+                        }
+                        mac-zoom-actual-btn := ChromeButton {
+                            label: "1:1";
+                            clicked => { root.zoom-actual-clicked(); }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ===================== the expanded tab panel, above the icon strip
+        if root.tab-open: tab-panel := Rectangle {
+            x: Theme.space-2;
+            y: parent.height - root.panel-height - (Theme.row-tail + 4px) - Theme.space-2;
+            width: 260px;
+            height: root.panel-height;
+            background: Theme.surface-raised;
+            border-width: 1px;
+            border-color: Theme.line;
+            border-radius: 4px;
+
+            VerticalLayout {
+                padding: Theme.space-2;
+                spacing: Theme.space-2;
+                alignment: start;
+
+                HorizontalLayout {
+                    spacing: Theme.space-2;
+                    Text {
+                        text: root.tab-name(root.active-tab);
+                        color: Theme.text-primary;
+                        font-family: Theme.label-font;
+                        font-size: Theme.text-title;
+                        font-weight: 600;
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                    }
+                    tab-panel-close := IconButton {
+                        icon: Icons.close;
+                        label: "Close panel";
+                        clicked => { root.tab-open = false; }
+                    }
+                }
+
+                HDivider { }
+
+                if root.active-tab == 0: WipPanel {
+                    title: "Media bay and file tree";
+                    items: ["Media bay", "File tree", "Project resources"];
+                }
+                if root.active-tab == 1: VerticalLayout {
+                    spacing: Theme.space-2;
+                    alignment: start;
+                    Text {
+                        text: "The drawing tools are in the toolbar above the canvas.";
+                        color: Theme.text-muted;
+                        font-family: Theme.label-font;
+                        font-size: Theme.text-body;
+                        wrap: word-wrap;
+                    }
+                    WipPanel {
+                        title: "Master management";
+                        items: ["Document master", "Templates"];
+                    }
+                }
+                if root.active-tab == 2: WipPanel {
+                    title: "Style";
+                    items: ["Background", "Backdrop selection", "Texture", "Export style"];
+                }
+                if root.active-tab == 3: WipPanel {
+                    title: "Secondary";
+                    items: ["Ribbon tab picker", "Tool / View / Custom tabs"];
+                }
+                if root.active-tab == 4: WipPanel {
+                    title: "Tool";
+                    items: ["Find", "AI chat", "Secondary tools"];
+                }
+                if root.active-tab == 5: WipPanel {
+                    title: "Command";
+                    items: ["CLI console", "PATH and directories", "AutoCAD-style command"];
+                }
+                if root.active-tab == 6: LayersPanel {
+                    layers: root.layers;
+                    active-layer: root.active-layer;
+                    show-layer-settings: true;
+
+                    layer-add-clicked() => { root.layer-add-clicked(); }
+                    layer-remove-clicked() => { root.layer-remove-clicked(); }
+                    layer-selected(i) => { root.layer-selected(i); }
+                    layer-visibility-toggled(i) => { root.layer-visibility-toggled(i); }
+                    layer-duplicate-clicked() => { root.layer-duplicate-clicked(); }
+                    layer-merge-clicked() => { root.layer-merge-clicked(); }
+                    layer-up-clicked() => { root.layer-up-clicked(); }
+                    layer-down-clicked() => { root.layer-down-clicked(); }
+                }
+                if root.active-tab == 7: WipPanel {
+                    title: "AI agent";
+                    items: ["Vision", "Assisted editing", "Command completion"];
+                }
+            }
+        }
+    }
+}

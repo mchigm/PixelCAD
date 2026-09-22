@@ -1,0 +1,113 @@
+// The layer stack, shared by both chrome trees (Linux shows it in the right
+// vertical strip; macOS shows it in the "Layers" vertical tab).
+//
+// Extracted from the original main.slint with behaviour unchanged, including
+// the top-first display order and the checkbox-offset touch area.
+
+import { Button, CheckBox } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { LayerRow } from "types.slint";
+import { WipPanel } from "wip.slint";
+
+export component LayersPanel {
+    in property <[LayerRow]> layers;
+    in property <int> active-layer;
+    // The sketch's macOS "Layers" tab also lists layer *settings* (locking,
+    // blend modes, groups) which do not exist yet; Linux hides that block.
+    in property <bool> show-layer-settings: false;
+
+    callback layer-add-clicked();
+    callback layer-remove-clicked();
+    callback layer-selected(int);
+    callback layer-visibility-toggled(int);
+    callback layer-duplicate-clicked();
+    callback layer-merge-clicked();
+    callback layer-up-clicked();
+    callback layer-down-clicked();
+
+    VerticalLayout {
+        spacing: Theme.space-1;
+        alignment: start;
+
+        Text {
+            text: "Layers";
+            color: Theme.text-primary;
+            font-size: Theme.text-label;
+            font-weight: 600;
+        }
+
+        layer-add-btn := Button {
+            text: "Add layer";
+            clicked => { root.layer-add-clicked(); }
+        }
+        HorizontalLayout {
+            spacing: Theme.space-1;
+            layer-up-btn := Button {
+                text: "Raise";
+                clicked => { root.layer-up-clicked(); }
+            }
+            layer-down-btn := Button {
+                text: "Lower";
+                clicked => { root.layer-down-clicked(); }
+            }
+        }
+        layer-duplicate-btn := Button {
+            text: "Duplicate layer";
+            clicked => { root.layer-duplicate-clicked(); }
+        }
+        layer-merge-btn := Button {
+            text: "Merge down";
+            enabled: root.layers.length > 1;
+            clicked => { root.layer-merge-clicked(); }
+        }
+        layer-remove-btn := Button {
+            text: "Delete layer";
+            enabled: root.layers.length > 1;
+            clicked => { root.layer-remove-clicked(); }
+        }
+
+        // Displayed top-first, which is the opposite of the model's
+        // bottom-first order; Rust converts the index.
+        for row[i] in root.layers: Rectangle {
+            height: 26px;
+            background: root.active-layer == (root.layers.length - 1 - i)
+                ? Theme.accent-quiet : transparent;
+            border-width: 1px;
+            border-color: Theme.line;
+
+            HorizontalLayout {
+                padding-left: Theme.space-1;
+                padding-right: Theme.space-1;
+                spacing: Theme.space-1;
+
+                layer-visible-box := CheckBox {
+                    checked: row.visible;
+                    toggled => {
+                        root.layer-visibility-toggled(root.layers.length - 1 - i);
+                    }
+                }
+                Text {
+                    text: row.name;
+                    color: Theme.text-primary;
+                    font-size: Theme.text-body;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    horizontal-stretch: 1;
+                }
+            }
+
+            // Offset past the visibility checkbox so that clicking the eye
+            // toggles it rather than merely selecting the row.
+            layer-row-touch := TouchArea {
+                x: 34px;
+                width: parent.width - 34px;
+                clicked => { root.layer-selected(root.layers.length - 1 - i); }
+            }
+        }
+
+        if root.show-layer-settings: WipPanel {
+            title: "Layer settings";
+            items: ["Lock layer", "Blend mode", "Groups", "Clipping masks"];
+        }
+    }
+}
